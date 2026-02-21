@@ -1,0 +1,63 @@
+const express = require("express");
+const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+
+const app = express();
+
+/* ---------------- SECURITY ---------------- */
+
+// Secure headers
+app.use(helmet());
+
+// Allow frontend/admin access
+app.use(cors({
+  origin: ["http://localhost:3001"],
+  methods: ["GET", "POST", "PUT", "DELETE"],
+}));
+
+// JSON parsing
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// NOTE: All media now stored in Cloudinary - no local uploads folder needed
+
+// Rate limiting
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 300,
+  })
+);
+
+/* ---------------- HEALTH CHECK ---------------- */
+
+app.get("/", (req, res) => {
+  res.json({ status: "Backend_Just_gold API Running 🚀" });
+});
+
+/* ---------------- ROUTES ---------------- */
+
+app.use("/api/v1/auth", require("./routes/auth.routes"));
+app.use("/api/v1", require("./routes/product.routes"));
+app.use("/api/v1/orders", require("./routes/order.routes"));
+app.use("/api/v1/categories", require("./routes/category.routes"));
+app.use("/api/v1", require("./routes/search.routes"));
+app.use("/api/v1/addresses", require("./routes/address.routes"));
+app.use("/api/v1/users", require("./routes/user.routes"));
+app.use("/api/v1/users", require("./routes/user.routes"));
+app.use("/api/v1/cart", require("./routes/cart.routes"));
+app.use("/api/v1/wishlist", require("./routes/wishlist.routes"));
+
+
+/* ---------------- 404 HANDLER ---------------- */
+
+app.use((req, res) => {
+  res.status(404).json({ message: "Route Not Found" });
+});
+
+/* ---------------- GLOBAL ERROR ---------------- */
+
+app.use(require("./middlewares/error.middleware"));
+
+module.exports = app;
