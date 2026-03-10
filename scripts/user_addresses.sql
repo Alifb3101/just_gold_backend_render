@@ -8,12 +8,26 @@ CREATE TABLE IF NOT EXISTS user_addresses (
   line1 TEXT NOT NULL,
   line2 TEXT,
   city VARCHAR(120),
-  state VARCHAR(120),
-  postal_code VARCHAR(30),
-  country VARCHAR(120),
+  emirate VARCHAR(120),
+  country VARCHAR(120) DEFAULT 'United Arab Emirates',
   is_default BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Ensure emirate and country shape exists for existing deployments
+ALTER TABLE user_addresses
+  ADD COLUMN IF NOT EXISTS emirate VARCHAR(120);
+
+ALTER TABLE user_addresses
+  DROP COLUMN IF EXISTS state,
+  DROP COLUMN IF EXISTS postal_code;
+
+ALTER TABLE user_addresses
+  ALTER COLUMN country SET DEFAULT 'United Arab Emirates';
+
+UPDATE user_addresses
+SET country = 'United Arab Emirates'
+WHERE country IS NULL;
 
 -- Add contact and address snapshot to orders
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS phone VARCHAR(30);

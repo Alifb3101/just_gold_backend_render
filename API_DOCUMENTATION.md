@@ -131,7 +131,7 @@ curl -X GET http://localhost:5000/api/v1/product/1-skin-gloss
   "afterimage": "https://res.cloudinary.com/.../images/skin-gloss-after.jpg",
   "how_to_apply": "Apply a small amount to cheekbones...",
   "benefits": "Provides instant radiant glow...",
-  "key_features": "Lightweight, water-resistant...",
+  "product_description": "Lightweight, water-resistant...",
   "ingredients": "Squalane, Vitamin E...",
   "variants": [
     {
@@ -185,7 +185,7 @@ Content-Type: multipart/form-data
 - `product_model_no` (text)
 - `how_to_apply` (text)
 - `benefits` (text)
-- `key_features` (text)
+- `product_description` (text)
 - `ingredients` (text)
 - `thumbnail` (text) - Cloudinary URL for default product image
 - `afterimage` (text) - Optional alternate/default image URL
@@ -219,7 +219,7 @@ curl -X POST http://localhost:5000/api/v1/product \
   -F "product_model_no=SKG-DLX-2026" \
   -F "how_to_apply=Apply to cheekbones for glow" \
   -F "benefits=Instant radiance, long-lasting shine" \
-  -F "key_features=Water-resistant, all skin types" \
+  -F "product_description=Water-resistant, all skin types" \
   -F "ingredients=Squalane, Vitamin E, Gold particles" \
   -F "thumbnail=https://res.cloudinary.com/.../skin-gloss-thumb.jpg" \
   -F "afterimage=https://res.cloudinary.com/.../skin-gloss-after.jpg" \
@@ -248,7 +248,7 @@ Content-Type: multipart/form-data
 - `product_model_no` (text)
 - `how_to_apply` (text)
 - `benefits` (text)
-- `key_features` (text)
+- `product_description` (text)
 - `ingredients` (text)
 - `thumbnail` (text)
 - `afterimage` (text)

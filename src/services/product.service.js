@@ -1,5 +1,6 @@
 const PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 50;
+const TAG_CODE_FILTER_REGEX = /^[A-Z0-9_-]{1,24}$/;
 
 const SORT_OPTIONS = {
 	price_low: { orderBy: "effective_price", direction: "ASC" },
@@ -35,6 +36,14 @@ const normalizeSearchTerm = (raw) => {
 	return value.toLowerCase();
 };
 
+const normalizeTagCode = (raw) => {
+	if (raw === undefined || raw === null) return null;
+	const value = String(raw).trim();
+	if (!value.length) return null;
+	const upper = value.toUpperCase();
+	return TAG_CODE_FILTER_REGEX.test(upper) ? upper : null;
+};
+
 const buildTsQuery = (searchTerm) => {
 	if (!searchTerm) return null;
 	const tokens = searchTerm
@@ -54,6 +63,7 @@ const normalizeFilters = (filters) => {
 		maxPrice: toNumber(filters.maxPrice),
 		color: filters.color ? String(filters.color).trim() : null,
 		size: filters.size ? String(filters.size).trim() : null,
+		tagCode: normalizeTagCode(filters.tagCode ?? filters.tag),
 		sort: SORT_OPTIONS[filters.sort] ? filters.sort : "newest",
 		cursor: toNumber(filters.cursor),
 		page: toPositiveInt(filters.page),
@@ -71,6 +81,7 @@ const buildCacheKey = (filters) => {
 		`max:${normalized.maxPrice ?? "none"}`,
 		`color:${normalized.color ?? "all"}`,
 		`size:${normalized.size ?? "all"}`,
+		`tag:${normalized.tagCode ?? "all"}`,
 		`sort:${normalized.sort}`,
 		`mode:${paginationMode}`,
 		`cursor:${normalized.cursor ?? 0}`,
@@ -92,12 +103,32 @@ const buildProductsQuery = (rawFilters = {}) => {
 		values.push(filters.categoryId);
 		const idx = values.length;
 		// Match products saved under a subcategory by accepting either the category id or its parent id.
-		where.push(`EXISTS (SELECT 1 FROM categories c WHERE c.id = p.category_id AND (c.id = $${idx} OR c.parent_id = $${idx}))`);
+		where.push(`(
+			EXISTS (SELECT 1 FROM categories c WHERE c.id = p.category_id AND (c.id = $${idx} OR c.parent_id = $${idx}))
+			OR EXISTS (
+				SELECT 1
+				FROM product_sections ps
+				JOIN sections s ON s.id = ps.section_id
+				WHERE ps.product_id = p.id
+				AND s.name = CASE $${idx}
+					WHEN 2 THEN 'new_arrivals'
+					WHEN 3 THEN 'best_seller'
+					ELSE '__none__'
+				END
+			)
+		)`);
 	}
 
 	if (filters.minPrice !== null) {
 		values.push(filters.minPrice);
 		where.push(`COALESCE(variant.price, p.base_price) >= $${values.length}`);
+	}
+
+	if (filters.tagCode) {
+		values.push(filters.tagCode);
+		where.push(
+			`EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(p.tags, '[]'::jsonb)) tag_elem WHERE UPPER(tag_elem->>'code') = $${values.length})`
+		);
 	}
 
 	if (filters.maxPrice !== null) {
@@ -157,6 +188,7 @@ const buildProductsQuery = (rawFilters = {}) => {
 			p.category_id,
 			p.base_price,
 			p.base_stock,
+			p.tags,
 			p.thumbnail,
 			p.thumbnail_key,
 			p.afterimage,

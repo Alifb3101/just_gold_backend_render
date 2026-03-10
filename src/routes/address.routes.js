@@ -6,5 +6,6 @@ router.get("/", auth, controller.list);
 router.post("/", auth, controller.create);
 router.post("/:id/default", auth, controller.setDefault);
 router.delete("/:id", auth, controller.remove);
+router.get("/emirates", auth, controller.listEmirates);
 
 module.exports = router;

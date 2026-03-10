@@ -1,6 +1,8 @@
 const pool = require("../config/db");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const { mergeGuestCartIntoUser } = require("../services/cart.service");
+const { extractGuestToken, clearGuestCookie } = require("../middlewares/identity.middleware");
 
 exports.register = async (req, res, next) => {
   try {
@@ -23,7 +25,7 @@ exports.register = async (req, res, next) => {
 
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    next(err);n
+    next(err);
   }
 };
 
@@ -50,6 +52,16 @@ exports.login = async (req, res, next) => {
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
+
+    const guestToken = extractGuestToken(req);
+    if (guestToken) {
+      try {
+        await mergeGuestCartIntoUser(user.id, guestToken);
+        clearGuestCookie(res);
+      } catch (mergeError) {
+        console.error("[auth] guest cart merge failed", { message: mergeError.message });
+      }
+    }
 
     res.json({ token });
   } catch (err) {

@@ -26,7 +26,7 @@ Body Type: form-data  ← IMPORTANT! Select this dropdown!
 ┃ product_model_no  ┃ Text ┃ LIP-2026-001                    ┃
 ┃ how_to_apply      ┃ Text ┃ Apply to lips                   ┃
 ┃ benefits          ┃ Text ┃ Long-lasting                    ┃
-┃ key_features      ┃ Text ┃ Matte finish                    ┃
+┃ product_description      ┃ Text ┃ Matte finish                    ┃
 ┃ ingredients       ┃ Text ┃ Shea butter                     ┃
 ┃ variants          ┃ Text ┃ (See format below ↓)            ┃
 ┗━━━━━━━━━━━━━━━━━━━┻━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛

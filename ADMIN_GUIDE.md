@@ -32,7 +32,7 @@ POST http://localhost:5000/api/v1/products
 | `product_model_no` | Text | "LIP-2026-001" |
 | `how_to_apply` | Text | "Apply directly to lips" |
 | `benefits` | Text | "Long-lasting, moisturizing" |
-| `key_features` | Text | "Matte finish, 12-hour wear" |
+| `product_description` | Text | "Matte finish, 12-hour wear" |
 | `ingredients` | Text | "Shea butter, Vitamin E" |
 | `variants` | Text | `[{"color":"Ruby Red","color_type":"warm","stock":100,"price":1299,"discount_price":999,"variant_model_no":"LIP-001-RR"}]` |
 
@@ -244,7 +244,7 @@ subcategory_id: 2
 product_model_no: SER-2026-001
 how_to_apply: Apply 2-3 drops on clean face
 benefits: Brightens skin, reduces dark spots
-key_features: Vitamin C enriched, lightweight formula
+product_description: Vitamin C enriched, lightweight formula
 ingredients: Vitamin C, Hyaluronic Acid, Niacinamide
 variants: [{"color":"30ml","stock":50,"price":2499,"discount_price":1999,"variant_model_no":"SER-001-30"},{"color":"50ml","stock":30,"price":3499,"discount_price":2999,"variant_model_no":"SER-001-50"}]
 

@@ -1,9 +1,19 @@
 const pool = require("../config/db");
 
+const UAE_EMIRATES = [
+  "Abu Dhabi",
+  "Dubai",
+  "Sharjah",
+  "Ajman",
+  "Umm Al Quwain",
+  "Ras Al Khaimah",
+  "Fujairah",
+];
+
 exports.list = async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT id, label, full_name, phone, line1, line2, city, state, postal_code, country, is_default, created_at
+      `SELECT id, label, full_name, phone, line1, line2, city, emirate, country, is_default, created_at
        FROM user_addresses WHERE user_id=$1 ORDER BY is_default DESC, created_at DESC`,
       [req.user.id]
     );
@@ -22,18 +32,23 @@ exports.create = async (req, res, next) => {
       line1,
       line2,
       city,
-      state,
-      postal_code,
+      emirate,
       country,
     } = req.body;
 
     if (!full_name || !phone || !line1)
       return res.status(400).json({ message: "full_name, phone, and line1 are required" });
 
+    if (!emirate || !UAE_EMIRATES.includes(emirate)) {
+      return res.status(400).json({ message: "A valid emirate is required" });
+    }
+
+    const normalizedCountry = country || "United Arab Emirates";
+
     const result = await pool.query(
-      `INSERT INTO user_addresses (user_id,label,full_name,phone,line1,line2,city,state,postal_code,country)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       RETURNING id, label, full_name, phone, line1, line2, city, state, postal_code, country, is_default, created_at`,
+      `INSERT INTO user_addresses (user_id,label,full_name,phone,line1,line2,city,emirate,country)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING id, label, full_name, phone, line1, line2, city, emirate, country, is_default, created_at`,
       [
         req.user.id,
         label,
@@ -42,9 +57,8 @@ exports.create = async (req, res, next) => {
         line1,
         line2 || null,
         city || null,
-        state || null,
-        postal_code || null,
-        country || null,
+        emirate,
+        normalizedCountry,
       ]
     );
 
@@ -52,6 +66,10 @@ exports.create = async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+};
+
+exports.listEmirates = (req, res) => {
+  res.json(UAE_EMIRATES);
 };
 
 exports.setDefault = async (req, res, next) => {

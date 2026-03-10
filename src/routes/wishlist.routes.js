@@ -6,6 +6,8 @@ router.use(auth);
 
 router.get("/", controller.getWishlist);
 router.post("/", controller.addToWishlist);
+router.delete("/", controller.removeFromWishlist);
+router.delete("/product/:productId", controller.removeFromWishlist);
 router.delete("/:variantId", controller.removeFromWishlist);
 
 module.exports = router;

@@ -69,6 +69,9 @@ const insertCategories = async () => {
     const giftsId = await insertCategory(client, "GIFTS");
     console.log(`✅ Created Category: GIFTS (ID: ${giftsId})`);
 
+    const nailsId = await insertCategory(client, "NAILS");
+    console.log(`✅ Created Category: NAILS (ID: ${nailsId})`);
+
     console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
     /* =====================================================
@@ -82,6 +85,7 @@ const insertCategories = async () => {
       "Powder",
       "Primer",
       "Bronzer",
+      "Blusher",
       "Highlighter",
       "Setting Spray"
     ];
@@ -149,6 +153,26 @@ const insertCategories = async () => {
     console.log(`\n📁 TOOLS & BRUSHES Subcategories:`);
     for (const subcat of toolsSubcategories) {
       const subId = await insertCategory(client, subcat, toolsId);
+      console.log(`   ↳ ${subcat} (ID: ${subId})`);
+    }
+
+    /* =====================================================
+       NAILS SUBCATEGORIES
+    ===================================================== */
+
+    const nailsSubcategories = [
+      "All Nails",
+      "Nail Polish",
+      "Nail Art",
+      "Nail Care",
+      "Nail Tools",
+      "Gel & Acrylic",
+      "Nail Sets"
+    ];
+
+    console.log(`\n📁 NAILS Subcategories:`);
+    for (const subcat of nailsSubcategories) {
+      const subId = await insertCategory(client, subcat, nailsId);
       console.log(`   ↳ ${subcat} (ID: ${subId})`);
     }
 

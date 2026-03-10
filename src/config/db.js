@@ -1,12 +1,39 @@
 const { Pool } = require("pg");
 
-const pool = new Pool({
-  user: "postgres",
-  host: "localhost",
-  database: "Just_gold",
-  password: "Aliasgar1234@#",
-  port: 5432,
-});
+const buildPoolConfig = () => {
+  if (process.env.DATABASE_URL) {
+    return {
+      connectionString: process.env.DATABASE_URL,
+      ssl:
+        process.env.NODE_ENV === "production"
+          ? { rejectUnauthorized: false }
+          : false,
+    };
+  }
+
+  const host = process.env.DB_HOST || process.env.PGHOST || "localhost";
+  const port = Number.parseInt(process.env.DB_PORT || process.env.PGPORT || "5432", 10);
+  const user = process.env.DB_USER || process.env.PGUSER || "postgres";
+  const database = process.env.DB_NAME || process.env.PGDATABASE || "Just_gold";
+  const password = process.env.DB_PASSWORD || process.env.PGPASSWORD;
+
+  if (process.env.NODE_ENV === "production" && !password) {
+    throw new Error(
+      "Missing DATABASE_URL (or DB/PG credentials) environment variable in production"
+    );
+  }
+
+  return {
+    host,
+    port: Number.isInteger(port) ? port : 5432,
+    user,
+    database,
+    password,
+    ssl: false,
+  };
+};
+
+const pool = new Pool(buildPoolConfig());
 
 pool.connect()
   .then(() => console.log("✅ PostgreSQL Connected Successfully"))

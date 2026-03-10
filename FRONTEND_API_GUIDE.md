@@ -75,7 +75,7 @@
   "base_price": "2499.00",
   "how_to_apply": "Apply...",
   "benefits": "Brightens",
-  "key_features": "Vitamin C",
+  "product_description": "Vitamin C",
   "ingredients": "Vitamin C, HA",
   "variants": [
     {

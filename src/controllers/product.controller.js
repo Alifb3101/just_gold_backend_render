@@ -10,6 +10,144 @@ const { logSearchQuery } = require("../services/search.service");
 const { getRedisClient } = require("../config/redis");
 
 const COLOR_PANEL_TYPES = ["hex", "gradient", "image"];
+const CATEGORY_SECTION_RULES = {
+  3: ["best_seller"],
+  2: ["new_arrivals"],
+};
+
+const TAG_TYPES = ["country", "badge"];
+const TAG_CODE_REGEX = /^[A-Z0-9_-]{1,24}$/;
+const MAX_TAGS = 20;
+
+let ensuredProductTagsColumn = false;
+
+const ensureProductTagsColumn = async (client) => {
+  if (ensuredProductTagsColumn) return;
+  const runner = client || pool;
+  await runner.query(
+    `ALTER TABLE products ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]'::jsonb`
+  );
+  await runner.query(
+    `CREATE INDEX IF NOT EXISTS idx_products_tags ON products USING GIN (tags)`
+  );
+  await runner.query(`UPDATE products SET tags = '[]'::jsonb WHERE tags IS NULL`);
+  await runner.query(
+    `DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'products' AND column_name = 'tag'
+      ) THEN
+        UPDATE products
+        SET tags = jsonb_build_array(jsonb_build_object('type', 'badge', 'code', UPPER(TRIM(tag))))
+        WHERE (tags IS NULL OR tags = '[]'::jsonb)
+          AND tag IS NOT NULL
+          AND TRIM(tag) <> ''
+          AND UPPER(TRIM(tag)) ~ '^[A-Z0-9_-]{1,24}$';
+      END IF;
+    END
+    $$;`
+  );
+  ensuredProductTagsColumn = true;
+};
+
+const normalizeTagsInput = (rawTags, legacyTag, { required = false } = {}) => {
+  if (rawTags === undefined || rawTags === null || rawTags === "") {
+    if (legacyTag !== undefined && legacyTag !== null && `${legacyTag}`.trim() !== "") {
+      const legacyCode = `${legacyTag}`.trim().toUpperCase();
+      if (!TAG_CODE_REGEX.test(legacyCode)) {
+        return {
+          error: "tag must be alphanumeric, dash, or underscore (max 24 chars)",
+        };
+      }
+      return { shouldUpdate: true, tags: [{ type: "badge", code: legacyCode }] };
+    }
+
+    return required ? { shouldUpdate: true, tags: [] } : { shouldUpdate: false, tags: null };
+  }
+
+  let parsed = rawTags;
+  if (typeof rawTags === "string") {
+    try {
+      parsed = JSON.parse(rawTags);
+    } catch (_) {
+      return { error: "tags must be valid JSON (array of objects)" };
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    return { error: "tags must be an array of tag objects" };
+  }
+
+  if (parsed.length > MAX_TAGS) {
+    return { error: `tags cannot contain more than ${MAX_TAGS} items` };
+  }
+
+  const normalized = [];
+
+  for (let i = 0; i < parsed.length; i += 1) {
+    const tag = parsed[i];
+
+    if (!tag || typeof tag !== "object" || Array.isArray(tag)) {
+      return { error: `tags[${i}] must be an object with type and code` };
+    }
+
+    const type = String(tag.type || "").trim().toLowerCase();
+    const codeRaw = String(tag.code || "").trim();
+
+    if (!TAG_TYPES.includes(type)) {
+      return { error: `tags[${i}].type must be one of: ${TAG_TYPES.join(", ")}` };
+    }
+
+    const code = codeRaw.toUpperCase();
+    if (!code || !TAG_CODE_REGEX.test(code)) {
+      return {
+        error: `tags[${i}].code must be alphanumeric/underscore/dash (1-24 chars)`
+      };
+    }
+
+    normalized.push({ type, code });
+  }
+
+  return { shouldUpdate: true, tags: normalized };
+};
+
+const AUTO_SECTION_NAMES = [...new Set(Object.values(CATEGORY_SECTION_RULES).flat())];
+
+const syncAutoSectionsByCategory = async ({ client, productId, categoryId }) => {
+  if (!productId || !AUTO_SECTION_NAMES.length) return;
+
+  const normalizedCategoryId = Number.parseInt(categoryId, 10);
+  const targetSectionNames = Number.isNaN(normalizedCategoryId)
+    ? []
+    : CATEGORY_SECTION_RULES[normalizedCategoryId] || [];
+
+  await client.query(
+    `
+      DELETE FROM product_sections
+      WHERE product_id = $1
+        AND section_id IN (
+          SELECT id
+          FROM sections
+          WHERE name = ANY($2::text[])
+        )
+    `,
+    [productId, AUTO_SECTION_NAMES]
+  );
+
+  if (!targetSectionNames.length) return;
+
+  await client.query(
+    `
+      INSERT INTO product_sections (product_id, section_id)
+      SELECT $1, s.id
+      FROM sections s
+      WHERE s.name = ANY($2::text[])
+      ON CONFLICT (product_id, section_id) DO NOTHING
+    `,
+    [productId, targetSectionNames]
+  );
+};
 
 const resolveMediaUrl = (key, url) => {
   if (key) return getMediaUrl(key);
@@ -141,18 +279,27 @@ const validateColorPanel = (rawType, rawValue, { requireValue, uploadedUrl }) =>
 ========================================================= */
 exports.getProducts = async (req, res, next) => {
   try {
+    await ensureProductTagsColumn();
+
+    const rawTagFilter = req.query.tagCode || req.query.tag;
+
     const filters = normalizeFilters({
       categoryId: req.query.category,
       minPrice: req.query.minPrice,
       maxPrice: req.query.maxPrice,
       color: req.query.color,
       size: req.query.size,
+      tagCode: rawTagFilter,
       sort: req.query.sort,
       cursor: req.query.cursor,
       page: req.query.page,
       limit: req.query.limit,
       search: req.query.search,
     });
+
+    if (rawTagFilter && !filters.tagCode) {
+      return res.status(400).json({ message: "Invalid tag code filter" });
+    }
 
     if (filters.search) {
       logSearchQuery(filters.search);
@@ -192,6 +339,7 @@ exports.getProducts = async (req, res, next) => {
       base_stock: row.base_stock,
       category_id: row.category_id,
       created_at: row.created_at,
+      tags: row.tags || [],
       thumbnail: resolveMediaUrl(row.thumbnail_key, row.thumbnail),
       afterimage: resolveMediaUrl(row.afterimage_key, row.afterimage),
     }));
@@ -227,6 +375,8 @@ exports.getProducts = async (req, res, next) => {
 ========================================================= */
 exports.getProductDetail = async (req, res, next) => {
   try {
+    await ensureProductTagsColumn();
+
     const productId = parseInt(req.params.id, 10);
 
     if (Number.isNaN(productId)) {
@@ -248,8 +398,9 @@ exports.getProductDetail = async (req, res, next) => {
         product_model_no,
         how_to_apply,
         benefits,
-        key_features,
+        product_description,
         ingredients,
+        tags,
         thumbnail,
         thumbnail_key,
         afterimage,
@@ -306,11 +457,27 @@ exports.getProductDetail = async (req, res, next) => {
     const canonicalUrl = `/api/v1/product/${product.id}-${product.slug}`;
     const requestedPath = `${req.baseUrl}${req.path}`;
 
+    const visibleVariants = variantsResult.rows.filter((variant) => {
+      const isSyntheticDefault =
+        variant.shade === "Default" &&
+        variant.color_type === null &&
+        variant.color_panel_type === null &&
+        variant.color_panel_value === null &&
+        String(variant.variant_model_no || "") === String(product.product_model_no || "") &&
+        String(variant.main_image || "") === String(product.thumbnail || "") &&
+        String(variant.secondary_image || "") === String(product.afterimage || "") &&
+        Number(variant.price ?? product.base_price ?? 0) === Number(product.base_price ?? 0) &&
+        Number(variant.stock ?? product.base_stock ?? 0) === Number(product.base_stock ?? 0);
+
+      return !isSyntheticDefault;
+    });
+
     const productPayload = {
       ...product,
+      tags: product.tags || [],
       thumbnail: resolveMediaUrl(product.thumbnail_key, product.thumbnail),
       afterimage: resolveMediaUrl(product.afterimage_key, product.afterimage),
-      variants: variantsResult.rows.map((variant) => ({
+      variants: visibleVariants.map((variant) => ({
         ...variant,
         main_image: resolveMediaUrl(variant.main_image_key, variant.main_image),
         secondary_image: resolveMediaUrl(variant.secondary_image_key, variant.secondary_image),
@@ -355,12 +522,31 @@ exports.createProduct = async (req, res, next) => {
       product_model_no,
       how_to_apply,
       benefits,
-      key_features,
+      product_description,
       ingredients,
       thumbnail,
       afterimage,
+      tags: rawTags,
+      tag: legacyTag,
       variants
     } = req.body;
+
+    await ensureProductTagsColumn(client);
+
+    const tagsValidation = normalizeTagsInput(rawTags, legacyTag, { required: true });
+    if (tagsValidation.error) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ message: tagsValidation.error });
+    }
+
+    const { url: providedThumbnail, key: providedThumbnailKey } = deriveMediaParams(
+      null,
+      thumbnail || null
+    );
+    const { url: providedAfterimage, key: providedAfterimageKey } = deriveMediaParams(
+      null,
+      afterimage || null
+    );
 
     /* -------- Basic Validation -------- */
 
@@ -379,8 +565,8 @@ exports.createProduct = async (req, res, next) => {
     const productResult = await client.query(
       `
       INSERT INTO products 
-      (name, slug, description, base_price, base_stock, category_id, product_model_no, how_to_apply, benefits, key_features, ingredients, thumbnail, afterimage)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      (name, slug, description, base_price, base_stock, category_id, product_model_no, how_to_apply, benefits, product_description, ingredients, thumbnail, afterimage, thumbnail_key, afterimage_key, tags)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
       RETURNING id
       `,
       [
@@ -393,14 +579,23 @@ exports.createProduct = async (req, res, next) => {
         product_model_no,
         how_to_apply,
         benefits,
-        key_features,
+        product_description,
         ingredients,
-        thumbnail || null,
-        afterimage || null,
+        providedThumbnail,
+        providedAfterimage,
+        providedThumbnailKey,
+        providedAfterimageKey,
+        tagsValidation.tags || [],
       ]
     );
 
     const productId = productResult.rows[0].id;
+
+    await syncAutoSectionsByCategory({
+      client,
+      productId,
+      categoryId: subcategory_id,
+    });
 
     /* =====================================================
        ORGANIZE FILES (Cloudinary URLs)
@@ -412,29 +607,48 @@ exports.createProduct = async (req, res, next) => {
     ];
     const videoFiles = req.files?.video || [];
 
+    let firstGalleryImageUrl = null;
+    let firstGalleryImageKey = null;
+    let secondGalleryImageUrl = null;
+    let secondGalleryImageKey = null;
+    let firstVariantMainImageUrl = null;
+    let firstVariantMainImageKey = null;
+
     /* -------- Save Gallery (Cloudinary URLs) -------- */
 
     for (let file of galleryFiles) {
+      const { url: imageUrl, key: imageKey } = deriveMediaParams(file);
+
+      if (!firstGalleryImageUrl && imageUrl) {
+        firstGalleryImageUrl = imageUrl;
+        firstGalleryImageKey = imageKey;
+      } else if (!secondGalleryImageUrl && imageUrl) {
+        secondGalleryImageUrl = imageUrl;
+        secondGalleryImageKey = imageKey;
+      }
+
       await client.query(
         `
         INSERT INTO product_images
-        (product_id, image_url, media_type)
-        VALUES ($1,$2,$3)
+        (product_id, image_url, image_key, media_type)
+        VALUES ($1,$2,$3,$4)
         `,
-        [productId, file.path || file.cloudinary?.secure_url, "image"]
+        [productId, imageUrl, imageKey, "image"]
       );
     }
 
     /* -------- Save Product Video (Cloudinary URL) -------- */
 
     if (videoFiles.length > 0) {
+      const { url: videoUrl, key: videoKey } = deriveMediaParams(videoFiles[0]);
+
       await client.query(
         `
         INSERT INTO product_images
-        (product_id, image_url, media_type)
-        VALUES ($1,$2,$3)
+        (product_id, image_url, image_key, media_type)
+        VALUES ($1,$2,$3,$4)
         `,
-        [productId, videoFiles[0].path || videoFiles[0].cloudinary?.secure_url, "video"]
+        [productId, videoUrl, videoKey, "video"]
       );
     }
 
@@ -443,6 +657,7 @@ exports.createProduct = async (req, res, next) => {
     ===================================================== */
 
     const parsedVariants = JSON.parse(variants || "[]");
+    const hasVariants = parsedVariants.length > 0;
 
     for (let i = 0; i < parsedVariants.length; i++) {
 
@@ -464,6 +679,11 @@ exports.createProduct = async (req, res, next) => {
 
       // Get Cloudinary URLs instead of local paths
       const { url: mainImagePath, key: mainImageKey } = deriveMediaParams(colorFile);
+
+      if (!firstVariantMainImageUrl && mainImagePath) {
+        firstVariantMainImageUrl = mainImagePath;
+        firstVariantMainImageKey = mainImageKey;
+      }
 
       const { url: secondaryImagePath, key: secondaryImageKey } =
         deriveMediaParams(secondaryColorFile);
@@ -514,6 +734,53 @@ exports.createProduct = async (req, res, next) => {
       );
     }
 
+    const thumbnailToSet =
+      providedThumbnail || firstVariantMainImageUrl || firstGalleryImageUrl || null;
+    const thumbnailKeyToSet = thumbnailToSet
+      ? thumbnailToSet === providedThumbnail
+        ? providedThumbnailKey
+        : thumbnailToSet === firstVariantMainImageUrl
+        ? firstVariantMainImageKey
+        : thumbnailToSet === firstGalleryImageUrl
+        ? firstGalleryImageKey
+        : null
+      : null;
+
+    const autoAfterimageUrl = !hasVariants && secondGalleryImageUrl
+      ? secondGalleryImageUrl
+      : firstGalleryImageUrl || firstVariantMainImageUrl || null;
+    const autoAfterimageKey = !hasVariants && secondGalleryImageKey
+      ? secondGalleryImageKey
+      : firstGalleryImageKey || firstVariantMainImageKey || null;
+
+    const afterimageToSet = providedAfterimage || autoAfterimageUrl;
+    const afterimageKeyToSet = afterimageToSet
+      ? afterimageToSet === providedAfterimage
+        ? providedAfterimageKey
+        : afterimageToSet === secondGalleryImageUrl
+        ? secondGalleryImageKey
+        : afterimageToSet === firstGalleryImageUrl
+        ? firstGalleryImageKey
+        : afterimageToSet === firstVariantMainImageUrl
+        ? firstVariantMainImageKey
+        : autoAfterimageKey
+      : null;
+
+    if (thumbnailToSet || afterimageToSet || thumbnailKeyToSet || afterimageKeyToSet) {
+      await client.query(
+        `
+        UPDATE products
+        SET
+          thumbnail = COALESCE(thumbnail, $2),
+          thumbnail_key = COALESCE(thumbnail_key, $3),
+          afterimage = COALESCE(afterimage, $4),
+          afterimage_key = COALESCE(afterimage_key, $5)
+        WHERE id = $1
+        `,
+        [productId, thumbnailToSet, thumbnailKeyToSet, afterimageToSet, afterimageKeyToSet]
+      );
+    }
+
     await client.query("COMMIT");
 
     res.status(201).json({
@@ -548,6 +815,8 @@ exports.updateProduct = async (req, res, next) => {
   try {
     await client.query("BEGIN");
 
+    await ensureProductTagsColumn(client);
+
     const { id } = req.params;
 
     /* -------- Validate Product Exists -------- */
@@ -571,14 +840,22 @@ exports.updateProduct = async (req, res, next) => {
       product_model_no,
       how_to_apply,
       benefits,
-      key_features,
+      product_description,
       ingredients,
       thumbnail,
       afterimage,
+      tags: rawTags,
+      tag: legacyTag,
       variants,
       delete_media_ids,
       delete_variant_ids,
     } = req.body;
+
+    const tagsValidation = normalizeTagsInput(rawTags, legacyTag, { required: false });
+    if (tagsValidation.error) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ message: tagsValidation.error });
+    }
 
     /* -------- Update Product Basic Info -------- */
 
@@ -602,11 +879,12 @@ exports.updateProduct = async (req, res, next) => {
         product_model_no = COALESCE($7, product_model_no),
         how_to_apply = COALESCE($8, how_to_apply),
         benefits = COALESCE($9, benefits),
-        key_features = COALESCE($10, key_features),
+        product_description = COALESCE($10, product_description),
         ingredients = COALESCE($11, ingredients),
         thumbnail = COALESCE($12, thumbnail),
-        afterimage = COALESCE($13, afterimage)
-      WHERE id = $14
+        afterimage = COALESCE($13, afterimage),
+        tags = COALESCE($14, tags)
+      WHERE id = $15
       `,
       [
         name || null,
@@ -618,13 +896,25 @@ exports.updateProduct = async (req, res, next) => {
         product_model_no || null,
         how_to_apply || null,
         benefits || null,
-        key_features || null,
+        product_description || null,
         ingredients || null,
         thumbnail || null,
         afterimage || null,
+        tagsValidation.shouldUpdate ? tagsValidation.tags : null,
         id,
       ]
     );
+
+    const effectiveCategoryId =
+      subcategory_id !== undefined && subcategory_id !== null && `${subcategory_id}`.trim() !== ""
+        ? subcategory_id
+        : existingProduct.rows[0].category_id;
+
+    await syncAutoSectionsByCategory({
+      client,
+      productId: id,
+      categoryId: effectiveCategoryId,
+    });
 
     /* =====================================================
        DELETE SPECIFIED MEDIA (if requested)
@@ -894,6 +1184,7 @@ exports.updateProduct = async (req, res, next) => {
 
     const responseProduct = {
       ...updatedProduct.rows[0],
+      tags: updatedProduct.rows[0]?.tags || [],
       thumbnail: resolveMediaUrl(updatedProduct.rows[0]?.thumbnail_key, updatedProduct.rows[0]?.thumbnail),
       afterimage: resolveMediaUrl(updatedProduct.rows[0]?.afterimage_key, updatedProduct.rows[0]?.afterimage),
     };
