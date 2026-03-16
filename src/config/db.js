@@ -1,13 +1,12 @@
 const { Pool } = require("pg");
 
 const buildPoolConfig = () => {
+  const sslRequired = process.env.DB_SSL === "true" || process.env.NODE_ENV === "production";
+
   if (process.env.DATABASE_URL) {
     return {
       connectionString: process.env.DATABASE_URL,
-      ssl:
-        process.env.NODE_ENV === "production"
-          ? { rejectUnauthorized: false }
-          : false,
+      ssl: sslRequired ? { rejectUnauthorized: false } : false,
     };
   }
 
@@ -29,7 +28,7 @@ const buildPoolConfig = () => {
     user,
     database,
     password,
-    ssl: false,
+    ssl: sslRequired ? { rejectUnauthorized: false } : false,
   };
 };
 

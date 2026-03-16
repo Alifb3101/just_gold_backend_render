@@ -7,13 +7,26 @@ const cookieParser = require("cookie-parser");
 
 const app = express();
 
-/* ---------------- CORS ---------------- */
+/* ---------------- CORS with X-Guest-Token Support ---------------- */
 
 const corsOptions = {
-  origin: true, // reflect request origin (useful in dev)
-  credentials: true,
+  // In production, use specific domains; in dev, accept all
+  origin: process.env.NODE_ENV === "production" 
+    ? [
+        process.env.FRONTEND_URL || "https://your-frontend-domain.com",
+        process.env.FRONTEND_URL_ALT || undefined,
+      ].filter(Boolean)
+    : true,
+  credentials: true, // Allow cookies and auth headers
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Guest-Token", // Frontend guest token header
+    "X-Requested-With",
+  ],
+  exposedHeaders: ["Content-Range", "X-Content-Range"], // Expose headers for the frontend
+  maxAge: 86400, // 24 hours preflight cache
 };
 
 // Apply CORS before any other middleware or routes (handles preflight too)

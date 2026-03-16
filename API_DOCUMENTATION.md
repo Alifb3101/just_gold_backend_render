@@ -386,7 +386,78 @@ curl -X GET http://localhost:5000/api/v1/categories
 
 ## 5️⃣ ORDERS
 
-*Currently no endpoints implemented*
+### Customer Endpoints
+
+#### GET My Orders
+```
+GET /api/v1/orders
+Authorization: Bearer TOKEN
+```
+
+Returns all orders for the authenticated user.
+
+#### GET My Order by ID
+```
+GET /api/v1/orders/my/:orderId
+Authorization: Bearer TOKEN
+```
+
+Returns single order details for the authenticated user.
+
+### Admin Endpoints
+
+#### GET All Orders (Admin)
+```
+GET /api/v1/orders/admin/all?page=1&limit=20&order_status=pending
+Authorization: Bearer ADMIN_TOKEN
+```
+
+**Query Params:**
+- `page`, `limit` - Pagination
+- `order_status` - pending, confirmed, processing, shipped, delivered, cancelled
+- `payment_status` - pending, paid, failed, refunded
+- `payment_method` - stripe, cod
+- `search` - Search by order number, customer name/email
+- `date_from`, `date_to` - Date range filter
+
+#### GET Single Order (Admin)
+```
+GET /api/v1/orders/admin/:orderId
+Authorization: Bearer ADMIN_TOKEN
+```
+
+#### Update Order Status (Admin)
+```
+PATCH /api/v1/orders/admin/:orderId/status
+Authorization: Bearer ADMIN_TOKEN
+Content-Type: application/json
+
+{
+  "order_status": "shipped"
+}
+```
+
+Valid statuses: `pending`, `confirmed`, `processing`, `shipped`, `delivered`, `cancelled`
+
+#### Update Payment Status (Admin)
+```
+PATCH /api/v1/orders/admin/:orderId/payment-status
+Authorization: Bearer ADMIN_TOKEN
+Content-Type: application/json
+
+{
+  "payment_status": "paid",
+  "financial_status": "paid"
+}
+```
+
+#### GET Order Statistics (Admin)
+```
+GET /api/v1/orders/admin/stats/summary?date_from=2026-01-01&date_to=2026-12-31
+Authorization: Bearer ADMIN_TOKEN
+```
+
+📖 **For complete admin implementation guide, see `ADMIN_ORDERS_API_GUIDE.md`**
 
 ---
 

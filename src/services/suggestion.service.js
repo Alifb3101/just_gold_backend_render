@@ -75,7 +75,7 @@ const setCachedData = async (key, data, ttl = CACHE_TTL_SECONDS) => {
 const mapProductFields = (row) => ({
   id: row.id,
   name: row.name,
-  price: parseFloat(row.price),
+  price: parseFloat(row.base_price),
   main_image: getMediaUrl(row.main_image_key, "thumbnail"),
   slug: row.slug,
 });
@@ -124,7 +124,7 @@ const getSimilarProducts = async (productId, categoryId, productTags = []) => {
       SELECT 
         p.id,
         p.name,
-        p.price,
+        p.base_price,
         p.main_image_key,
         p.slug,
         p.category_id,
@@ -192,7 +192,7 @@ const getFrequentlyBoughtTogether = async (productId, productData = {}) => {
     SELECT 
       p.id,
       p.name,
-      p.price,
+      p.base_price,
       p.main_image_key,
       p.slug,
       p.category_id,
@@ -300,7 +300,7 @@ const getColdStartFallback = async (productId, productData, excludeIds, limit) =
     SELECT 
       p.id,
       p.name,
-      p.price,
+      p.base_price,
       p.main_image_key,
       p.slug,
       p.category_id,
@@ -347,7 +347,7 @@ const getTrendingProducts = async (excludeIds = []) => {
     SELECT 
       p.id,
       p.name,
-      p.price,
+      p.base_price,
       p.main_image_key,
       p.slug,
       p.category_id,

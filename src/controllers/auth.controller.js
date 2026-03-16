@@ -53,17 +53,40 @@ exports.login = async (req, res, next) => {
       { expiresIn: "7d" }
     );
 
+    // Extract guest token from header (X-Guest-Token) or cookie
+    // Priority: Header > Cookie
     const guestToken = extractGuestToken(req);
+    
     if (guestToken) {
       try {
+        // Merge guest cart items into user's cart
         await mergeGuestCartIntoUser(user.id, guestToken);
+        
+        // Clear the guest token cookie (header token is frontend-managed)
         clearGuestCookie(res);
+        
+        if (process.env.NODE_ENV === "development") {
+          console.log(`[auth] Guest cart merged: user_id=${user.id}, guestToken=${guestToken}`);
+        }
       } catch (mergeError) {
-        console.error("[auth] guest cart merge failed", { message: mergeError.message });
+        // Log but don't fail the login
+        console.error("[auth] guest cart merge failed", { 
+          userId: user.id,
+          message: mergeError.message,
+          stack: process.env.NODE_ENV === "development" ? mergeError.stack : undefined,
+        });
       }
     }
 
-    res.json({ token });
+    res.json({ 
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+      }
+    });
   } catch (err) {
     next(err);
   }

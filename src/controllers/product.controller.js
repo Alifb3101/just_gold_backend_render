@@ -112,6 +112,27 @@ const normalizeTagsInput = (rawTags, legacyTag, { required = false } = {}) => {
   return { shouldUpdate: true, tags: normalized };
 };
 
+const pickCategoryId = (body = {}) => {
+  const candidates = [
+    body.subcategory_id,
+    body.subcategoryId,
+    body.category_id,
+    body.categoryId,
+  ];
+
+  for (const value of candidates) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+};
+
 const AUTO_SECTION_NAMES = [...new Set(Object.values(CATEGORY_SECTION_RULES).flat())];
 
 const syncAutoSectionsByCategory = async ({ client, productId, categoryId }) => {
@@ -518,7 +539,6 @@ exports.createProduct = async (req, res, next) => {
       description,
       base_price,
       base_stock,
-      subcategory_id,
       product_model_no,
       how_to_apply,
       benefits,
@@ -530,6 +550,8 @@ exports.createProduct = async (req, res, next) => {
       tag: legacyTag,
       variants
     } = req.body;
+
+    const categoryId = pickCategoryId(req.body);
 
     await ensureProductTagsColumn(client);
 
@@ -550,8 +572,10 @@ exports.createProduct = async (req, res, next) => {
 
     /* -------- Basic Validation -------- */
 
-    if (!name || !base_price || !subcategory_id) {
-      return res.status(400).json({ message: "Missing required fields" });
+    if (!name || !base_price || categoryId === null) {
+      return res.status(400).json({
+        message: "Missing required fields: name, base_price, and category_id or subcategory_id are required",
+      });
     }
 
     const slug = name
@@ -575,7 +599,7 @@ exports.createProduct = async (req, res, next) => {
         description,
         base_price,
         Number.isFinite(parseInt(base_stock, 10)) ? parseInt(base_stock, 10) : 30,
-        subcategory_id,
+        categoryId,
         product_model_no,
         how_to_apply,
         benefits,
@@ -594,7 +618,7 @@ exports.createProduct = async (req, res, next) => {
     await syncAutoSectionsByCategory({
       client,
       productId,
-      categoryId: subcategory_id,
+      categoryId,
     });
 
     /* =====================================================
@@ -836,7 +860,6 @@ exports.updateProduct = async (req, res, next) => {
       description,
       base_price,
       base_stock,
-      subcategory_id,
       product_model_no,
       how_to_apply,
       benefits,
@@ -850,6 +873,8 @@ exports.updateProduct = async (req, res, next) => {
       delete_media_ids,
       delete_variant_ids,
     } = req.body;
+
+    const categoryId = pickCategoryId(req.body);
 
     const tagsValidation = normalizeTagsInput(rawTags, legacyTag, { required: false });
     if (tagsValidation.error) {
@@ -892,7 +917,7 @@ exports.updateProduct = async (req, res, next) => {
         description || null,
         base_price || null,
         base_stock !== undefined ? parseInt(base_stock, 10) : null,
-        subcategory_id || null,
+        categoryId,
         product_model_no || null,
         how_to_apply || null,
         benefits || null,
@@ -906,8 +931,8 @@ exports.updateProduct = async (req, res, next) => {
     );
 
     const effectiveCategoryId =
-      subcategory_id !== undefined && subcategory_id !== null && `${subcategory_id}`.trim() !== ""
-        ? subcategory_id
+      categoryId !== null
+        ? categoryId
         : existingProduct.rows[0].category_id;
 
     await syncAutoSectionsByCategory({
