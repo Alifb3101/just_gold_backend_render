@@ -33,9 +33,8 @@ const RECENCY_DAYS = 90; // Products older than this get 0 recency score
 ========================================================= */
 
 const WEIGHTS = {
-  sales: 0.6,
-  rating: 0.3,
-  recency: 0.1,
+  sales: 0.7,
+  recency: 0.3,
 };
 
 /* =========================================================
@@ -76,7 +75,7 @@ const mapProductFields = (row) => ({
   id: row.id,
   name: row.name,
   price: parseFloat(row.base_price),
-  main_image: getMediaUrl(row.main_image_key, "thumbnail"),
+  main_image: getMediaUrl(row.thumbnail_key, "thumbnail"),
   slug: row.slug,
 });
 
@@ -107,13 +106,13 @@ const applyBrandDiversity = (products, maxPerBrand = MAX_PER_BRAND) => {
 
 /* =========================================================
    1) SIMILAR PRODUCTS (ENHANCED)
-   - Scoring: (sales * 0.6) + (rating * 0.3) + (recency * 0.1)
+   - Scoring: (sales * 0.7) + (recency * 0.3)
    - Recency: 1.0 for new, decreasing to 0 for 90+ days old
    - Brand diversity applied
    - Uses pre-aggregated sales stats
 ========================================================= */
 
-const getSimilarProducts = async (productId, categoryId, productTags = []) => {
+const getSimilarProducts = async (productId, categoryId) => {
   const cacheKey = buildCacheKey(productId, "similar");
   const cached = await getCachedData(cacheKey);
   if (cached) return cached;
@@ -125,19 +124,12 @@ const getSimilarProducts = async (productId, categoryId, productTags = []) => {
         p.id,
         p.name,
         p.base_price,
-        p.main_image_key,
+        p.thumbnail_key,
         p.slug,
         p.category_id,
         p.created_at,
-        COALESCE(p.rating, 0) AS rating,
         COALESCE(pss.total_sales, 0) AS sales_count,
-        -- Extract brand from tags JSONB (first match with type='brand')
-        (
-          SELECT tag_elem->>'code'
-          FROM jsonb_array_elements(COALESCE(p.tags, '[]'::jsonb)) tag_elem
-          WHERE tag_elem->>'type' = 'brand'
-          LIMIT 1
-        ) AS brand,
+        COALESCE(p.category_id::text, 'unknown') AS brand,
         -- Recency score: 1.0 for today, decreasing to 0 for 90+ days old
         GREATEST(0, 1.0 - (EXTRACT(EPOCH FROM NOW() - p.created_at) / (${RECENCY_DAYS} * 86400))) AS recency_score
       FROM products p
@@ -148,10 +140,9 @@ const getSimilarProducts = async (productId, categoryId, productTags = []) => {
     )
     SELECT 
       *,
-      -- Composite score formula
+      -- Composite score formula: sales (70%) + recency (30%)
       (
         (LEAST(sales_count, 1000) / 1000.0 * ${WEIGHTS.sales}) +
-        (rating / 5.0 * ${WEIGHTS.rating}) +
         (recency_score * ${WEIGHTS.recency})
       ) AS score
     FROM product_scores
@@ -177,7 +168,7 @@ const getSimilarProducts = async (productId, categoryId, productTags = []) => {
    - Fallback 3: Same category products
 ========================================================= */
 
-const getFrequentlyBoughtTogether = async (productId, productData = {}) => {
+const getFrequentlyBoughtTogether = async (productId) => {
   const cacheKey = buildCacheKey(productId, "bought_together");
   const cached = await getCachedData(cacheKey);
   if (cached) return cached;
@@ -193,15 +184,10 @@ const getFrequentlyBoughtTogether = async (productId, productData = {}) => {
       p.id,
       p.name,
       p.base_price,
-      p.main_image_key,
+      p.thumbnail_key,
       p.slug,
       p.category_id,
-      (
-        SELECT tag_elem->>'code'
-        FROM jsonb_array_elements(COALESCE(p.tags, '[]'::jsonb)) tag_elem
-        WHERE tag_elem->>'type' = 'brand'
-        LIMIT 1
-      ) AS brand,
+      COALESCE(p.category_id::text, 'unknown') AS brand,
       COUNT(DISTINCT oi.order_id) AS co_purchase_count
     FROM order_items oi
     INNER JOIN product_orders po ON oi.order_id = po.order_id
@@ -222,9 +208,16 @@ const getFrequentlyBoughtTogether = async (productId, productData = {}) => {
     const existingIds = products.map((p) => p.id);
     existingIds.push(productId);
     
+    // Fetch product category for fallback
+    const { rows: productRows } = await pool.query(
+      'SELECT category_id FROM products WHERE id = $1',
+      [productId]
+    );
+    const productCategory = productRows[0] || { category_id: null };
+    
     const fallbackProducts = await getColdStartFallback(
       productId,
-      productData,
+      productCategory,
       existingIds,
       SUGGESTION_LIMIT - products.length
     );
@@ -242,85 +235,32 @@ const getFrequentlyBoughtTogether = async (productId, productData = {}) => {
 ========================================================= */
 
 const getColdStartFallback = async (productId, productData, excludeIds, limit) => {
-  const { category_id: categoryId, tags = [] } = productData;
-  
-  // Extract brand from tags
-  const brandTag = tags.find((t) => t.type === "brand");
-  const brandCode = brandTag?.code;
-  
-  // Extract other tag codes for matching
-  const tagCodes = tags
-    .filter((t) => t.type !== "brand")
-    .map((t) => t.code)
-    .slice(0, 5); // Limit to 5 tags for query efficiency
+  const { category_id: categoryId } = productData;
 
-  const excludePlaceholders = excludeIds.map((_, i) => `$${i + 1}`).join(", ");
-  const values = [...excludeIds];
-  let paramIndex = excludeIds.length;
-
-  let conditions = [];
-
-  // Build priority conditions
-  if (brandCode) {
-    paramIndex++;
-    conditions.push(`(
-      EXISTS (
-        SELECT 1 FROM jsonb_array_elements(COALESCE(p.tags, '[]'::jsonb)) tag_elem
-        WHERE tag_elem->>'type' = 'brand' AND tag_elem->>'code' = $${paramIndex}
-      )
-    )`);
-    values.push(brandCode);
-  }
-
-  if (tagCodes.length > 0) {
-    paramIndex++;
-    conditions.push(`(
-      EXISTS (
-        SELECT 1 FROM jsonb_array_elements(COALESCE(p.tags, '[]'::jsonb)) tag_elem
-        WHERE tag_elem->>'code' = ANY($${paramIndex}::text[])
-      )
-    )`);
-    values.push(tagCodes);
-  }
-
-  if (categoryId) {
-    paramIndex++;
-    conditions.push(`p.category_id = $${paramIndex}`);
-    values.push(categoryId);
-  }
-
-  if (conditions.length === 0) {
+  if (!categoryId) {
     return []; // No fallback criteria available
   }
-
-  paramIndex++;
-  values.push(limit * 2);
 
   const query = `
     SELECT 
       p.id,
       p.name,
       p.base_price,
-      p.main_image_key,
+      p.thumbnail_key,
       p.slug,
       p.category_id,
-      (
-        SELECT tag_elem->>'code'
-        FROM jsonb_array_elements(COALESCE(p.tags, '[]'::jsonb)) tag_elem
-        WHERE tag_elem->>'type' = 'brand'
-        LIMIT 1
-      ) AS brand,
+      COALESCE(p.category_id::text, 'unknown') AS brand,
       COALESCE(pss.total_sales, 0) AS sales_count
     FROM products p
     LEFT JOIN product_sales_stats pss ON pss.product_id = p.id
-    WHERE p.id NOT IN (${excludePlaceholders})
+    WHERE p.category_id = $1
+      AND p.id != ALL($2::int[])
       AND p.is_active = true
-      AND (${conditions.join(" OR ")})
     ORDER BY sales_count DESC, p.created_at DESC
-    LIMIT $${paramIndex}
+    LIMIT $3
   `;
 
-  const { rows } = await pool.query(query, values);
+  const { rows } = await pool.query(query, [categoryId, excludeIds, limit * 2]);
   const diverseProducts = applyBrandDiversity(rows);
   return diverseProducts.slice(0, limit).map(mapProductFields);
 };
@@ -348,15 +288,10 @@ const getTrendingProducts = async (excludeIds = []) => {
       p.id,
       p.name,
       p.base_price,
-      p.main_image_key,
+      p.thumbnail_key,
       p.slug,
       p.category_id,
-      (
-        SELECT tag_elem->>'code'
-        FROM jsonb_array_elements(COALESCE(p.tags, '[]'::jsonb)) tag_elem
-        WHERE tag_elem->>'type' = 'brand'
-        LIMIT 1
-      ) AS brand,
+      COALESCE(p.category_id::text, 'unknown') AS brand,
       COALESCE(pss.last_30_days_sales, 0) AS recent_sales,
       COALESCE(pss.total_sales, 0) AS total_sales
     FROM products p
@@ -387,9 +322,9 @@ const getTrendingProducts = async (excludeIds = []) => {
 ========================================================= */
 
 const getProductSuggestions = async (productId) => {
-  // Fetch product with category and tags for fallback logic
+  // Fetch product with category for fallback logic
   const productQuery = `
-    SELECT id, category_id, tags 
+    SELECT id, category_id
     FROM products 
     WHERE id = $1 AND is_active = true
   `;
@@ -400,15 +335,12 @@ const getProductSuggestions = async (productId) => {
   }
 
   const productData = productRows[0];
-  const { category_id: categoryId, tags: rawTags } = productData;
-  
-  // Parse tags if string
-  const tags = typeof rawTags === "string" ? JSON.parse(rawTags) : (rawTags || []);
+  const { category_id: categoryId } = productData;
 
   // Fetch similar and frequently bought together in parallel
   const [similarProducts, frequentlyBoughtTogether] = await Promise.all([
-    getSimilarProducts(productId, categoryId, tags),
-    getFrequentlyBoughtTogether(productId, { category_id: categoryId, tags }),
+    getSimilarProducts(productId, categoryId),
+    getFrequentlyBoughtTogether(productId),
   ]);
 
   // Collect IDs already shown to exclude from trending
