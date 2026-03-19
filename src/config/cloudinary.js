@@ -77,6 +77,27 @@ const variantImageStorage = new CloudinaryStorage({
 });
 
 /* =========================================================
+   CLOUDINARY STORAGE FOR REVIEW IMAGES
+   - Separate folder for user-submitted review images
+   - Auto-compressed for storage efficiency
+   - Supports customer photos of products
+========================================================= */
+
+const reviewImageStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: "just_gold/reviews",
+    allowed_formats: ["jpg", "jpeg", "png", "webp", "gif"],
+    transformation: [
+      { width: 1200, height: 1200, crop: "limit" }, // Max dimensions
+      { quality: "auto:good" }, // Good quality, smaller file size
+      { fetch_format: "auto" }, // Auto format (WebP/AVIF)
+    ],
+    resource_type: "image",
+  },
+});
+
+/* =========================================================
    DELETE FILE FROM CLOUDINARY
    - Used when deleting products or updating images
    - Extracts public_id from Cloudinary URL
@@ -160,6 +181,7 @@ module.exports = {
   productImageStorage,
   productVideoStorage,
   variantImageStorage,
+  reviewImageStorage,
   deleteFromCloudinary,
   deleteMultipleFromCloudinary,
   getOptimizedUrl,
