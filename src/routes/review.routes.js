@@ -126,16 +126,4 @@ router.put("/reviews/:reviewId", authMiddleware, updateReview);
  */
 router.delete("/reviews/:reviewId", authMiddleware, deleteReview);
 
-// ============================================================
-// ERROR HANDLING
-// ============================================================
-
-// If no route matches
-router.all("*", (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: "Review endpoint not found",
-  });
-});
-
 module.exports = router;
