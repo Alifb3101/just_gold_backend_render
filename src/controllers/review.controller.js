@@ -307,14 +307,21 @@ const createReview = async (req, res, next) => {
     }
 
     // Check if user purchased this product (for verified_purchase flag)
-    const purchaseCheck = await pool.query(
-      `SELECT 1 FROM order_items oi
-       JOIN orders o ON oi.order_id = o.id
-       WHERE oi.product_id = $1 AND o.user_id = $2 AND o.status IN ('completed', 'delivered')
-       LIMIT 1`,
-      [productId, userId]
-    );
-    const verifiedPurchase = purchaseCheck.rows.length > 0;
+    // Note: Verified purchase is set based on order existence
+    let verifiedPurchase = false;
+    try {
+      const purchaseCheck = await pool.query(
+        `SELECT 1 FROM order_items oi
+         JOIN orders o ON oi.order_id = o.id
+         WHERE oi.product_id = $1 AND o.user_id = $2
+         LIMIT 1`,
+        [productId, userId]
+      );
+      verifiedPurchase = purchaseCheck.rows.length > 0;
+    } catch (err) {
+      // If order check fails, default to false
+      verifiedPurchase = false;
+    }
 
     // Insert review
     const reviewResult = await pool.query(
