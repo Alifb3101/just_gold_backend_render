@@ -30,14 +30,7 @@ CREATE TABLE reviews (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   
   -- Uniqueness constraint - one review per user per product
-  UNIQUE(product_id, user_id),
-  
-  -- Indexes for performance
-  INDEX idx_product_id (product_id),
-  INDEX idx_user_id (user_id),
-  INDEX idx_rating (rating),
-  INDEX idx_created_at (created_at DESC),
-  INDEX idx_verified_purchase (verified_purchase)
+  UNIQUE(product_id, user_id)
 );
 
 -- ============================================================
@@ -49,32 +42,41 @@ CREATE TABLE review_images (
   review_id INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
   image_key VARCHAR(255) NOT NULL,  -- Cloudinary image key
   image_order INTEGER DEFAULT 0,     -- Order of images in review
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  
-  -- Indexes
-  INDEX idx_review_id (review_id),
-  INDEX idx_image_order (image_order)
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============================================================
 -- INDEXES FOR COMMON QUERIES
 -- ============================================================
 
--- Get average rating and count for products
-CREATE INDEX idx_reviews_product_rating 
+-- Reviews table indexes
+CREATE INDEX IF NOT EXISTS idx_reviews_product_id 
+  ON reviews(product_id);
+
+CREATE INDEX IF NOT EXISTS idx_reviews_user_id 
+  ON reviews(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_reviews_product_rating 
   ON reviews(product_id, rating);
 
--- Get user reviews
-CREATE INDEX idx_reviews_user 
+CREATE INDEX IF NOT EXISTS idx_reviews_user_created 
   ON reviews(user_id, created_at DESC);
 
--- Get recent reviews for product
-CREATE INDEX idx_reviews_product_recent 
+CREATE INDEX IF NOT EXISTS idx_reviews_product_recent 
   ON reviews(product_id, created_at DESC);
 
--- Get reviews by rating for sorting
-CREATE INDEX idx_reviews_product_rating_created 
+CREATE INDEX IF NOT EXISTS idx_reviews_product_rating_created 
   ON reviews(product_id, rating DESC, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_reviews_verified_purchase 
+  ON reviews(verified_purchase);
+
+-- Review images table indexes
+CREATE INDEX IF NOT EXISTS idx_review_images_review_id 
+  ON review_images(review_id);
+
+CREATE INDEX IF NOT EXISTS idx_review_images_order 
+  ON review_images(image_order);
 
 -- ============================================================
 -- VIEWS FOR AGGREGATED DATA
@@ -101,17 +103,19 @@ GROUP BY p.id;
 -- TRIGGERS FOR TIMESTAMP MANAGEMENT
 -- ============================================================
 
+-- Create update_timestamp function if it doesn't exist
+CREATE OR REPLACE FUNCTION update_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger for reviews table
+DROP TRIGGER IF EXISTS update_reviews_timestamp ON reviews;
+
 CREATE TRIGGER update_reviews_timestamp
 BEFORE UPDATE ON reviews
 FOR EACH ROW
 EXECUTE FUNCTION update_timestamp();
-
--- Note: Requires existing update_timestamp() function
--- If not exists, create with:
--- CREATE FUNCTION update_timestamp()
--- RETURNS TRIGGER AS $$
--- BEGIN
---   NEW.updated_at = CURRENT_TIMESTAMP;
---   RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
