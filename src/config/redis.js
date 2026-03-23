@@ -1,6 +1,7 @@
 let clientPromise = null;
 let clientInstance = null;
 let initializationFailed = false;
+let errorLogged = false;
 
 const connect = async () => {
   if (clientPromise || initializationFailed) return clientPromise;
@@ -10,22 +11,42 @@ const connect = async () => {
     const client = createClient({
       url: process.env.REDIS_URL || "redis://localhost:6379",
       socket: {
-        connectTimeout: 2000,
+        connectTimeout: 1000,
+        reconnectStrategy: false,  // Don't reconnect, just fail fast
       },
     });
 
     client.on("error", (err) => {
       initializationFailed = true;
-      console.warn("Redis disabled (connection error):", err.message);
+      if (!errorLogged) {
+        console.warn("[REDIS] Connection failed, caching disabled");
+        errorLogged = true;
+      }
     });
 
-    clientPromise = client.connect().then(() => {
+    clientPromise = Promise.race([
+      client.connect(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Redis timeout')), 1500)
+      )
+    ]).then(() => {
       clientInstance = client;
+      console.log("[REDIS] ✅ Connected");
       return clientInstance;
+    }).catch(err => {
+      initializationFailed = true;
+      if (!errorLogged) {
+        console.warn("[REDIS] Connection failed:", err.message);
+        errorLogged = true;
+      }
+      return null;
     });
   } catch (err) {
     initializationFailed = true;
-    console.warn("Redis client not initialized:", err.message);
+    if (!errorLogged) {
+      console.warn("[REDIS] Initialization failed:", err.message);
+      errorLogged = true;
+    }
     clientPromise = Promise.resolve(null);
   }
 
@@ -34,6 +55,7 @@ const connect = async () => {
 
 const getRedisClient = async () => {
   if (clientInstance) return clientInstance;
+  if (initializationFailed) return null;
   return connect();
 };
 
