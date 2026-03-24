@@ -1,12 +1,14 @@
 const { Pool } = require("pg");
 
 const buildPoolConfig = () => {
-  // Always require SSL for Supabase (and Render production)
+  // For DATABASE_URL (Supabase), SSL is handled via connection string
+  // For fallback config, require SSL in production
   const sslRequired = process.env.DB_SSL === "true" || process.env.NODE_ENV === "production" || !!process.env.DATABASE_URL;
 
   if (process.env.DATABASE_URL) {
     return {
       connectionString: process.env.DATABASE_URL,
+      // Supabase may have self-signed certs, so reject unauthorized certs = false
       ssl: sslRequired ? { rejectUnauthorized: false } : false,
       // Connection pooling parameters for stability
       max: 10,
