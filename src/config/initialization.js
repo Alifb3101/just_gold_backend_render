@@ -114,10 +114,15 @@ const ensureGuestCartSchema = async () => {
     await client.query("COMMIT");
     initializationLog("✅ Guest cart schema initialization complete!\n");
   } catch (err) {
-    await client.query("ROLLBACK");
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackErr) {
+      // Connection may be already terminated, that's OK
+      console.warn("[DB_INIT] ROLLBACK failed (connection may be down):", rollbackErr.message);
+    }
     initializationLog("❌ Schema initialization failed:", err.message);
     // Don't crash the server, but log the error
-    console.error("Database initialization error:", err);
+    console.error("[DB_INIT] Database initialization error:", err.message);
   } finally {
     client.release();
   }
@@ -131,8 +136,9 @@ const initializeDatabase = async () => {
     initializationLog("Starting database initialization...");
     await ensureGuestCartSchema();
   } catch (err) {
-    initializationLog("Fatal initialization error:", err.message);
-    process.exit(1);
+    initializationLog("⚠️  Database initialization failed (non-fatal):", err.message);
+    console.warn("[DB_INIT] Server will continue running. Check database connection.");
+    // Don't crash the server - allow it to start so we can diagnose the issue
   }
 };
 
