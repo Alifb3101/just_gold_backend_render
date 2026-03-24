@@ -1,12 +1,17 @@
 const { Pool } = require("pg");
 
 const buildPoolConfig = () => {
-  const sslRequired = process.env.DB_SSL === "true" || process.env.NODE_ENV === "production";
+  // Always require SSL for Supabase (and Render production)
+  const sslRequired = process.env.DB_SSL === "true" || process.env.NODE_ENV === "production" || !!process.env.DATABASE_URL;
 
   if (process.env.DATABASE_URL) {
     return {
       connectionString: process.env.DATABASE_URL,
       ssl: sslRequired ? { rejectUnauthorized: false } : false,
+      // Connection pooling parameters for stability
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
     };
   }
 
