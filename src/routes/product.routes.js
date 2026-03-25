@@ -217,12 +217,12 @@ const uploadHandler = (req, res, next) => {
 /* -------- ROUTES -------- */
 
 // Product CRUD (single resource)
-router.post("/product", uploadHandler, controller.createProduct);
-router.put("/product/:id", uploadHandler, controller.updateProduct);
-router.delete("/product/:id", controller.deleteProduct);
-router.get("/product/:id-:slug", controller.getProductDetail);
+router.post("/products", uploadHandler, controller.createProduct);
+router.put("/products/:id", uploadHandler, controller.updateProduct);
+router.delete("/products/:id", controller.deleteProduct);
+router.get("/products/:id-:slug", controller.getProductDetail);
 
-// Product collection
+// Product collection (list all)
 router.get("/products", controller.getProducts);
 
 module.exports = router;
