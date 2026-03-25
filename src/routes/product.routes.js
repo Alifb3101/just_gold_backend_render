@@ -24,6 +24,7 @@ const buildVariantFields = () => {
 };
 
 const uploadFields = [
+  { name: "image", maxCount: 1 },
   { name: "gallery", maxCount: 6 },
   { name: "media", maxCount: 6 },
   { name: "video", maxCount: 1 },
@@ -219,6 +220,7 @@ const uploadHandler = (req, res, next) => {
 // Product CRUD (single resource)
 router.post("/products", uploadHandler, controller.createProduct);
 router.put("/products/:id", uploadHandler, controller.updateProduct);
+router.post("/products/:id/upload", uploadHandler, controller.updateProduct);
 router.delete("/products/:id", controller.deleteProduct);
 router.get("/products/:id-:slug", controller.getProductDetail);
 
