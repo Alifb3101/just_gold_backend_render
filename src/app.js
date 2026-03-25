@@ -77,6 +77,7 @@ app.use("/api/checkout", require("./routes/checkout.routes"));
 app.use("/api/v1/checkout", require("./routes/checkout.routes"));
 app.use("/api", require("./routes/section.routes"));
 app.use("/api/v1", require("./routes/section.routes"));
+app.use("/api/v1/settings", require("./routes/settings.routes"));
 
 
 /* ---------------- 404 HANDLER ---------------- */

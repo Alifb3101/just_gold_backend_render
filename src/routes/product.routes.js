@@ -83,25 +83,48 @@ const validateFileForCloudinary = (fieldName, file) => {
 /* =========================================================
    UPLOAD HANDLER - DUAL PROVIDER SUPPORT
    - Supports Cloudinary (legacy) and ImageKit (new)
-   - Route based on MEDIA_PROVIDER environment variable
+   - Route based on MEDIA_PROVIDER environment variable OR request override
+   - Priority: request param > request header > env var
    - MEDIA_PROVIDER=imagekit → ImageKit uploads
    - MEDIA_PROVIDER=cloudinary (or unset) → Cloudinary uploads
 ========================================================= */
 
-const getMediaProvider = () => {
-  const provider = process.env.MEDIA_PROVIDER || 'cloudinary';
-  console.log(`[MEDIA PROVIDER] Using: ${provider}`);
-  return provider.toLowerCase();
+const getMediaProvider = (req = null) => {
+  let provider = process.env.MEDIA_PROVIDER || 'cloudinary';
+  
+  // Allow override from request (highest priority)
+  if (req) {
+    // Check query parameter
+    if (req.query?.mediaProvider) {
+      provider = req.query.mediaProvider;
+    }
+    // Check request body
+    else if (req.body?.mediaProvider) {
+      provider = req.body.mediaProvider;
+    }
+    // Check header
+    else if (req.headers['x-media-provider']) {
+      provider = req.headers['x-media-provider'];
+    }
+  }
+  
+  const normalized = provider.toLowerCase();
+  console.log(`[MEDIA PROVIDER] Using: ${normalized}`, {
+    fromEnv: process.env.MEDIA_PROVIDER,
+    fromRequest: req ? (req.query?.mediaProvider || req.body?.mediaProvider || req.headers['x-media-provider']) : null,
+  });
+  return normalized;
 };
 
 const uploadHandler = (req, res, next) => {
   upload(req, res, async (err) => {
+    const provider = getMediaProvider(req);
     console.log("[UPLOAD DEBUG] Request received", {
       method: req.method,
       path: req.path,
       files: req.files ? Object.keys(req.files) : "NO FILES",
       hasAuth: !!req.headers.authorization,
-      provider: getMediaProvider(),
+      provider: provider,
     });
 
     if (err) {
@@ -125,8 +148,7 @@ const uploadHandler = (req, res, next) => {
 
     // Route to appropriate upload provider
     if (req.files && Object.keys(req.files).length > 0) {
-      const provider = getMediaProvider();
-      
+      // Use provider already determined at top of handler
       if (provider === 'imagekit') {
         return uploadToImageKit(req, res, next);
       } else {
