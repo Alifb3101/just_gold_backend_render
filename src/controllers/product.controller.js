@@ -1,6 +1,6 @@
 const pool = require("../config/db");
 const { deleteMultipleFromCloudinary } = require("../config/cloudinary");
-const { getMediaUrl } = require("../services/media.service");
+const { getMediaUrl, resolveMediaUrl } = require("../services/media.service");
 const {
   buildProductsQuery,
   buildCacheKey,
@@ -168,11 +168,6 @@ const syncAutoSectionsByCategory = async ({ client, productId, categoryId }) => 
     `,
     [productId, targetSectionNames]
   );
-};
-
-const resolveMediaUrl = (key, url) => {
-  if (key) return getMediaUrl(key);
-  return url || null;
 };
 
 // Extracts the Cloudinary/R2 storage key from a full URL (removes version + extension)
@@ -361,8 +356,8 @@ exports.getProducts = async (req, res, next) => {
       category_id: row.category_id,
       created_at: row.created_at,
       tags: row.tags || [],
-      thumbnail: resolveMediaUrl(row.thumbnail_key, row.thumbnail),
-      afterimage: resolveMediaUrl(row.afterimage_key, row.afterimage),
+      thumbnail: resolveMediaUrl(row.thumbnail, row.thumbnail_key, row.media_provider, 'thumbnail'),
+      afterimage: resolveMediaUrl(row.afterimage, row.afterimage_key, row.media_provider, 'product'),
     }));
 
     const payload =
@@ -496,16 +491,16 @@ exports.getProductDetail = async (req, res, next) => {
     const productPayload = {
       ...product,
       tags: product.tags || [],
-      thumbnail: resolveMediaUrl(product.thumbnail_key, product.thumbnail),
-      afterimage: resolveMediaUrl(product.afterimage_key, product.afterimage),
+      thumbnail: resolveMediaUrl(product.thumbnail, product.thumbnail_key, product.media_provider, 'thumbnail'),
+      afterimage: resolveMediaUrl(product.afterimage, product.afterimage_key, product.media_provider, 'product'),
       variants: visibleVariants.map((variant) => ({
         ...variant,
-        main_image: resolveMediaUrl(variant.main_image_key, variant.main_image),
-        secondary_image: resolveMediaUrl(variant.secondary_image_key, variant.secondary_image),
+        main_image: resolveMediaUrl(variant.main_image, variant.main_image_key, variant.media_provider, 'product'),
+        secondary_image: resolveMediaUrl(variant.secondary_image, variant.secondary_image_key, variant.media_provider, 'product'),
       })),
       media: mediaResult.rows.map((media) => ({
         ...media,
-        image_url: resolveMediaUrl(media.image_key, media.image_url),
+        image_url: resolveMediaUrl(media.image_url, media.image_key, media.media_provider, 'product'),
       })),
     };
 
@@ -1210,19 +1205,19 @@ exports.updateProduct = async (req, res, next) => {
     const responseProduct = {
       ...updatedProduct.rows[0],
       tags: updatedProduct.rows[0]?.tags || [],
-      thumbnail: resolveMediaUrl(updatedProduct.rows[0]?.thumbnail_key, updatedProduct.rows[0]?.thumbnail),
-      afterimage: resolveMediaUrl(updatedProduct.rows[0]?.afterimage_key, updatedProduct.rows[0]?.afterimage),
+      thumbnail: resolveMediaUrl(updatedProduct.rows[0]?.thumbnail, updatedProduct.rows[0]?.thumbnail_key, updatedProduct.rows[0]?.media_provider, 'thumbnail'),
+      afterimage: resolveMediaUrl(updatedProduct.rows[0]?.afterimage, updatedProduct.rows[0]?.afterimage_key, updatedProduct.rows[0]?.media_provider, 'product'),
     };
 
     const responseVariants = updatedVariants.rows.map((variant) => ({
       ...variant,
-      main_image: resolveMediaUrl(variant.main_image_key, variant.main_image),
-      secondary_image: resolveMediaUrl(variant.secondary_image_key, variant.secondary_image),
+      main_image: resolveMediaUrl(variant.main_image, variant.main_image_key, variant.media_provider, 'product'),
+      secondary_image: resolveMediaUrl(variant.secondary_image, variant.secondary_image_key, variant.media_provider, 'product'),
     }));
 
     const responseMedia = updatedMedia.rows.map((media) => ({
       ...media,
-      image_url: resolveMediaUrl(media.image_key, media.image_url),
+      image_url: resolveMediaUrl(media.image_url, media.image_key, media.media_provider, 'product'),
     }));
 
     res.json({

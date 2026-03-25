@@ -1,10 +1,6 @@
 const pool = require("../config/db");
-const { getMediaUrl } = require("./media.service");
+const { getMediaUrl, resolveMediaUrl } = require("./media.service");
 
-const resolveMediaUrl = (key, url) => {
-  if (key) return getMediaUrl(key);
-  return url || null;
-};
 
 const normalizeQuery = (raw) => {
   if (raw === undefined || raw === null) return null;
@@ -66,7 +62,7 @@ const fetchSearchSuggestions = async (query) => {
   return result.rows.map((row) => ({
     name: row.name,
     slug: row.slug,
-    thumbnail: resolveMediaUrl(row.thumbnail_key, row.thumbnail),
+    thumbnail: resolveMediaUrl(row.thumbnail, row.thumbnail_key, row.media_provider, 'thumbnail'),
   }));
 };
 
