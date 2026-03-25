@@ -87,7 +87,15 @@ const validateFileForCloudinary = (fieldName, file) => {
 
 const uploadHandler = (req, res, next) => {
   upload(req, res, async (err) => {
+    console.log("[UPLOAD DEBUG] Request received", {
+      method: req.method,
+      path: req.path,
+      files: req.files ? Object.keys(req.files) : "NO FILES",
+      hasAuth: !!req.headers.authorization,
+    });
+
     if (err) {
+      console.error("[UPLOAD ERROR] Multer error:", err);
       if (err instanceof multer.MulterError) {
         if (err.code === "LIMIT_FILE_SIZE") {
           return res.status(400).json({
@@ -108,6 +116,7 @@ const uploadHandler = (req, res, next) => {
     // Upload to Cloudinary
     if (req.files && Object.keys(req.files).length > 0) {
       try {
+        console.log("[UPLOAD DEBUG] Processing files:", Object.keys(req.files));
         const cloudinary = require("cloudinary").v2;
         const uploadPromises = [];
 
