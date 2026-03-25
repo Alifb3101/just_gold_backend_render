@@ -196,13 +196,33 @@ const deriveMediaParams = (file, fallbackUrl = null) => {
     return {
       url: fallbackUrl || null,
       key: extractMediaKeyFromUrl(fallbackUrl),
+      provider: fallbackUrl ? 'cloudinary' : null,
     };
   }
 
-  const url = file.path || file.cloudinary?.secure_url || null;
-  const key = file.cloudinary?.public_id || extractMediaKeyFromUrl(url);
+  // Handle ImageKit uploads
+  if (file.imagekit) {
+    const url = file.imagekit.url;
+    const key = file.imagekit.fileId || file.imagekit.name || extractMediaKeyFromUrl(url);
+    console.log("[DERIVE MEDIA PARAMS] ImageKit upload:", { url, key });
+    return { url, key, provider: 'imagekit' };
+  }
 
-  return { url, key };
+  // Handle Cloudinary uploads
+  if (file.cloudinary) {
+    const url = file.cloudinary.secure_url;
+    const key = file.cloudinary.public_id;
+    console.log("[DERIVE MEDIA PARAMS] Cloudinary upload:", { url, key });
+    return { url, key, provider: 'cloudinary' };
+  }
+
+  // Fallback: just use file.path (for backward compatibility)
+  const url = file.path || null;
+  const key = extractMediaKeyFromUrl(url);
+  const provider = url ? 'imagekit' : null;
+  
+  console.log("[DERIVE MEDIA PARAMS] Fallback:", { url, key, provider });
+  return { url, key, provider };
 };
 
 const isValidHexColor = (value) => {
@@ -966,14 +986,30 @@ exports.updateProduct = async (req, res, next) => {
     }
 
     /* =====================================================
-       ADD NEW MEDIA (Gallery/Video)
+       ADD NEW MEDIA (Thumbnail/Gallery/Video)
     ===================================================== */
 
+    const imageFiles = req.files?.image || [];
     const galleryFiles = [
       ...(req.files?.gallery || []),
       ...(req.files?.media || []),
     ];
     const videoFiles = req.files?.video || [];
+
+    // Handle thumbnail image (from /products/:id/upload endpoint)
+    if (imageFiles.length > 0) {
+      const file = imageFiles[0];
+      const { url: imageUrl, key: imageKey, provider } = deriveMediaParams(file);
+      
+      await client.query(
+        `
+        UPDATE products 
+        SET thumbnail = $1, thumbnail_key = $2, media_provider = $3
+        WHERE id = $4
+        `,
+        [imageUrl, imageKey, provider || 'imagekit', id]
+      );
+    }
 
     // Save new gallery images
     for (let file of galleryFiles) {

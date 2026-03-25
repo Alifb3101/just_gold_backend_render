@@ -81,10 +81,18 @@ const validateFileForCloudinary = (fieldName, file) => {
 };
 
 /* =========================================================
-   CLOUDINARY UPLOAD HANDLER
-   - Uploads directly to Cloudinary cloud storage
-   - No local file storage needed
+   UPLOAD HANDLER - DUAL PROVIDER SUPPORT
+   - Supports Cloudinary (legacy) and ImageKit (new)
+   - Route based on MEDIA_PROVIDER environment variable
+   - MEDIA_PROVIDER=imagekit → ImageKit uploads
+   - MEDIA_PROVIDER=cloudinary (or unset) → Cloudinary uploads
 ========================================================= */
+
+const getMediaProvider = () => {
+  const provider = process.env.MEDIA_PROVIDER || 'cloudinary';
+  console.log(`[MEDIA PROVIDER] Using: ${provider}`);
+  return provider.toLowerCase();
+};
 
 const uploadHandler = (req, res, next) => {
   upload(req, res, async (err) => {
@@ -93,6 +101,7 @@ const uploadHandler = (req, res, next) => {
       path: req.path,
       files: req.files ? Object.keys(req.files) : "NO FILES",
       hasAuth: !!req.headers.authorization,
+      provider: getMediaProvider(),
     });
 
     if (err) {
@@ -114,105 +123,212 @@ const uploadHandler = (req, res, next) => {
       });
     }
 
-    // Upload to Cloudinary
+    // Route to appropriate upload provider
     if (req.files && Object.keys(req.files).length > 0) {
-      try {
-        console.log("[UPLOAD DEBUG] Processing files:", Object.keys(req.files));
-        const cloudinary = require("cloudinary").v2;
-        const uploadPromises = [];
-
-        for (const fieldName in req.files) {
-          const files = req.files[fieldName];
-          
-          for (const file of files) {
-            const validationError = validateFileForCloudinary(fieldName, file);
-            if (validationError) {
-              return res.status(400).json({
-                message: validationError,
-                field: fieldName,
-                filename: file.originalname || "unknown",
-              });
-            }
-
-            // Determine folder based on field type
-            let folder = "just_gold/products/images";
-            let resourceType = "image";
-
-            if (fieldName === "video") {
-              folder = "just_gold/products/videos";
-              resourceType = "video";
-            } else if (
-              fieldName.startsWith("color_") ||
-              fieldName.startsWith("color_secondary_") ||
-              fieldName.startsWith("variant_main_image_") ||
-              fieldName.startsWith("variant_secondary_image_")
-            ) {
-              folder = "just_gold/products/variants";
-            }
-
-            // Upload to Cloudinary
-            const uploadPromise = new Promise((resolve, reject) => {
-              const uploadStream = cloudinary.uploader.upload_stream(
-                {
-                  folder: folder,
-                  resource_type: resourceType,
-                  transformation: resourceType === "image" ? [
-                    { width: 1500, height: 1500, crop: "limit" },
-                    { quality: "auto:best" },
-                    { fetch_format: "auto" },
-                  ] : [
-                    { quality: "auto" },
-                  ],
-                },
-                (error, result) => {
-                  if (error) {
-                    error._fieldName = fieldName;
-                    error._filename = file.originalname || "unknown";
-                    error._mimetype = file.mimetype;
-                    reject(error);
-                  } else {
-                    // Replace file object with Cloudinary result
-                    file.cloudinary = result;
-                    file.path = result.secure_url;
-                    file.filename = result.public_id.split("/").pop();
-                    resolve(result);
-                  }
-                }
-              );
-              
-              uploadStream.end(file.buffer);
-            });
-
-            uploadPromises.push(uploadPromise);
-          }
-        }
-
-        await Promise.all(uploadPromises);
-        next();
-      } catch (error) {
-        console.error("Cloudinary upload error:", {
-          message: error.message,
-          http_code: error.http_code,
-          field: error._fieldName,
-          filename: error._filename,
-          mimetype: error._mimetype,
-        });
-        const statusCode = error.http_code === 400 ? 400 : 500;
-        return res.status(statusCode).json({
-          message: "Cloudinary rejected the uploaded file. Ensure you're sending a valid image/video file via form-data.",
-          details: {
-            field: error._fieldName || null,
-            filename: error._filename || null,
-            mimetype: error._mimetype || null,
-            cloudinary_error: error.message,
-            http_code: error.http_code || null,
-          },
-        });
+      const provider = getMediaProvider();
+      
+      if (provider === 'imagekit') {
+        return uploadToImageKit(req, res, next);
+      } else {
+        return uploadToCloudinary(req, res, next);
       }
     } else {
       next();
     }
   });
+};
+
+/* =========================================================
+   CLOUDINARY UPLOAD FUNCTION
+========================================================= */
+const uploadToCloudinary = async (req, res, next) => {
+  try {
+    console.log("[UPLOAD DEBUG] Processing files to Cloudinary:", Object.keys(req.files));
+    const cloudinary = require("cloudinary").v2;
+    const uploadPromises = [];
+
+    for (const fieldName in req.files) {
+      const files = req.files[fieldName];
+      
+      for (const file of files) {
+        const validationError = validateFileForCloudinary(fieldName, file);
+        if (validationError) {
+          return res.status(400).json({
+            message: validationError,
+            field: fieldName,
+            filename: file.originalname || "unknown",
+          });
+        }
+
+        // Determine folder based on field type
+        let folder = "just_gold/products/images";
+        let resourceType = "image";
+
+        if (fieldName === "video") {
+          folder = "just_gold/products/videos";
+          resourceType = "video";
+        } else if (
+          fieldName.startsWith("color_") ||
+          fieldName.startsWith("color_secondary_") ||
+          fieldName.startsWith("variant_main_image_") ||
+          fieldName.startsWith("variant_secondary_image_")
+        ) {
+          folder = "just_gold/products/variants";
+        }
+
+        // Upload to Cloudinary
+        const uploadPromise = new Promise((resolve, reject) => {
+          const uploadStream = cloudinary.uploader.upload_stream(
+            {
+              folder: folder,
+              resource_type: resourceType,
+              transformation: resourceType === "image" ? [
+                { width: 1500, height: 1500, crop: "limit" },
+                { quality: "auto:best" },
+                { fetch_format: "auto" },
+              ] : [
+                { quality: "auto" },
+              ],
+            },
+            (error, result) => {
+              if (error) {
+                error._fieldName = fieldName;
+                error._filename = file.originalname || "unknown";
+                error._mimetype = file.mimetype;
+                reject(error);
+              } else {
+                // Replace file object with Cloudinary result
+                file.cloudinary = result;
+                file.path = result.secure_url;
+                file.filename = result.public_id.split("/").pop();
+                resolve(result);
+              }
+            }
+          );
+          
+          uploadStream.end(file.buffer);
+        });
+
+        uploadPromises.push(uploadPromise);
+      }
+    }
+
+    await Promise.all(uploadPromises);
+    next();
+  } catch (error) {
+    console.error("Cloudinary upload error:", {
+      message: error.message,
+      http_code: error.http_code,
+      field: error._fieldName,
+      filename: error._filename,
+      mimetype: error._mimetype,
+    });
+    const statusCode = error.http_code === 400 ? 400 : 500;
+    return res.status(statusCode).json({
+      message: "Cloudinary rejected the uploaded file. Ensure you're sending a valid image/video file via form-data.",
+      details: {
+        field: error._fieldName || null,
+        filename: error._filename || null,
+        mimetype: error._mimetype || null,
+        cloudinary_error: error.message,
+        http_code: error.http_code || null,
+      },
+    });
+  }
+};
+
+/* =========================================================
+   IMAGEKIT UPLOAD FUNCTION
+========================================================= */
+const uploadToImageKit = async (req, res, next) => {
+  try {
+    console.log("[UPLOAD DEBUG] Processing files to ImageKit:", Object.keys(req.files));
+    const imageKit = require("../config/imagekit");
+    const uploadPromises = [];
+
+    for (const fieldName in req.files) {
+      const files = req.files[fieldName];
+      
+      for (const file of files) {
+        const validationError = validateFileForCloudinary(fieldName, file);
+        if (validationError) {
+          return res.status(400).json({
+            message: validationError,
+            field: fieldName,
+            filename: file.originalname || "unknown",
+          });
+        }
+
+        // Determine folder based on field type
+        let folder = "just_gold/products/images";
+
+        if (fieldName === "video") {
+          folder = "just_gold/products/videos";
+        } else if (
+          fieldName.startsWith("color_") ||
+          fieldName.startsWith("color_secondary_") ||
+          fieldName.startsWith("variant_main_image_") ||
+          fieldName.startsWith("variant_secondary_image_")
+        ) {
+          folder = "just_gold/products/variants";
+        }
+
+        // Upload to ImageKit
+        const uploadPromise = imageKit.upload({
+          file: file.buffer,
+          fileName: file.originalname || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          folder: folder,
+          isPrivateFile: false,
+          useUniqueFileName: true,
+        }).then((result) => {
+          console.log("[IMAGEKIT UPLOAD] Success:", {
+            fileName: result.name,
+            fileId: result.fileId,
+            url: result.url,
+            folder: folder,
+          });
+          
+          // Store ImageKit result in file object
+          file.imagekit = result;
+          file.path = result.url;
+          file.filename = result.name;
+          return result;
+        }).catch((error) => {
+          console.error("[IMAGEKIT UPLOAD] Error:", {
+            fieldName: fieldName,
+            filename: file.originalname,
+            error: error.message,
+          });
+          error._fieldName = fieldName;
+          error._filename = file.originalname || "unknown";
+          error._mimetype = file.mimetype;
+          throw error;
+        });
+
+        uploadPromises.push(uploadPromise);
+      }
+    }
+
+    await Promise.all(uploadPromises);
+    console.log("[UPLOAD DEBUG] All files uploaded to ImageKit successfully");
+    next();
+  } catch (error) {
+    console.error("ImageKit upload error:", {
+      message: error.message,
+      field: error._fieldName,
+      filename: error._filename,
+      mimetype: error._mimetype,
+    });
+    return res.status(500).json({
+      message: "ImageKit rejected the uploaded file. Ensure you're sending a valid image/video file via form-data.",
+      details: {
+        field: error._fieldName || null,
+        filename: error._filename || null,
+        mimetype: error._mimetype || null,
+        imagekit_error: error.message,
+      },
+    });
+  }
 };
 
 /* -------- ROUTES -------- */
