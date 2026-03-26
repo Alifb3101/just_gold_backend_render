@@ -556,6 +556,16 @@ exports.createProduct = async (req, res, next) => {
   const client = await pool.connect();
 
   try {
+    // DEBUG: Log request details
+    console.log("[CREATE PRODUCT] Request received:", {
+      method: req.method,
+      path: req.path,
+      hasFiles: !!req.files && Object.keys(req.files).length > 0,
+      hasBody: !!req.body,
+      bodyKeys: req.body ? Object.keys(req.body) : [],
+      contentType: req.headers['content-type'],
+    });
+
     await client.query("BEGIN");
 
     const {
@@ -575,12 +585,22 @@ exports.createProduct = async (req, res, next) => {
       variants
     } = req.body;
 
+    console.log("[CREATE PRODUCT] Extracted fields:", {
+      name: name ? "✓" : "✗",
+      description: description ? "✓" : "✗",
+      base_price: base_price ? "✓ " + base_price : "✗",
+      base_stock: base_stock ? "✓" : "✗",
+      categoryId: req.body.category_id || req.body.subcategory_id ? "✓" : "✗",
+      tags: rawTags ? "✓" : legacyTag ? "✓ (legacy)" : "✗",
+    });
+
     const categoryId = pickCategoryId(req.body);
 
     await ensureProductTagsColumn(client);
 
     const tagsValidation = normalizeTagsInput(rawTags, legacyTag, { required: true });
     if (tagsValidation.error) {
+      console.error("[CREATE PRODUCT] Tags validation failed:", tagsValidation.error);
       await client.query("ROLLBACK");
       return res.status(400).json({ message: tagsValidation.error });
     }
@@ -597,6 +617,11 @@ exports.createProduct = async (req, res, next) => {
     /* -------- Basic Validation -------- */
 
     if (!name || !base_price || categoryId === null) {
+      console.error("[CREATE PRODUCT] Validation failed:", {
+        name: !!name,
+        base_price: !!base_price,
+        categoryId: categoryId !== null,
+      });
       return res.status(400).json({
         message: "Missing required fields: name, base_price, and category_id or subcategory_id are required",
       });
@@ -838,12 +863,25 @@ exports.createProduct = async (req, res, next) => {
 
   } catch (err) {
     await client.query("ROLLBACK");
+    
+    console.error("[CREATE PRODUCT] Error occurred:", {
+      message: err.message,
+      code: err.code,
+      detail: err.detail,
+      stack: err.stack,
+      constraint: err.constraint,
+    });
+
     if (err.code === "23505") {
       return res.status(409).json({ message: "Product slug already exists" });
     }
-    console.error("Create Product Error:", err);
+    
     res.status(500).json({
-      message: err.message || "Error creating product"
+      message: err.message || "Error creating product",
+      debug: {
+        errorCode: err.code,
+        errorDetail: err.detail
+      }
     });
   } finally {
     client.release();

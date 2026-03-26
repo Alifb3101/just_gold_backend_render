@@ -369,7 +369,9 @@ router.get("/products/:id-:slug", controller.getProductDetail);
 router.get("/product/:id-:slug", controller.getProductDetail);
 
 // Backward-compat: legacy singular CRUD endpoints
-router.post("/product", uploadHandler, controller.createProduct);
+// JSON-only create (for admin panel) - no upload handler
+router.post("/product", controller.createProduct);
+// Form-data update (with images)
 router.put("/product/:id", uploadHandler, controller.updateProduct);
 router.delete("/product/:id", controller.deleteProduct);
 router.get("/product", controller.getProducts);
