@@ -200,7 +200,16 @@ const deriveMediaParams = (file, fallbackUrl = null) => {
     };
   }
 
-  // Handle ImageKit uploads
+  // Handle ImageKit CDN via S3-backed uploads (key-first storage)
+  if (file.imagekitKey) {
+    const endpoint = (process.env.IMAGEKIT_URL_ENDPOINT || "").replace(/\/$/, "");
+    const key = file.imagekitKey;
+    const url = endpoint ? `${endpoint}/${key}` : null;
+    console.log("[DERIVE MEDIA PARAMS] ImageKit (S3) upload:", { url, key });
+    return { url, key, provider: 'imagekit' };
+  }
+
+  // Handle legacy ImageKit uploads (direct SDK/REST)
   if (file.imagekit) {
     const url = file.imagekit.url;
     const key = file.imagekit.fileId || file.imagekit.name || extractMediaKeyFromUrl(url);

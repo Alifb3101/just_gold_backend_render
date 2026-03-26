@@ -260,17 +260,20 @@ const uploadToCloudinary = async (req, res, next) => {
 };
 
 /* =========================================================
-   IMAGEKIT UPLOAD FUNCTION
+   IMAGEKIT UPLOAD FUNCTION (S3-backed)
 ========================================================= */
 const uploadToImageKit = async (req, res, next) => {
   try {
-    console.log("[UPLOAD DEBUG] Processing files to ImageKit:", Object.keys(req.files));
-    const imageKit = require("../config/imagekit");
+    const { PutObjectCommand } = require("@aws-sdk/client-s3");
+    const s3 = require("../config/s3");
+    const endpoint = (process.env.IMAGEKIT_URL_ENDPOINT || "").replace(/\/$/, "");
+
+    console.log("[UPLOAD DEBUG] Processing files to ImageKit (via S3):", Object.keys(req.files));
+
     const uploadPromises = [];
 
     for (const fieldName in req.files) {
       const files = req.files[fieldName];
-      
       for (const file of files) {
         const validationError = validateFileForCloudinary(fieldName, file);
         if (validationError) {
@@ -283,7 +286,6 @@ const uploadToImageKit = async (req, res, next) => {
 
         // Determine folder based on field type
         let folder = "just_gold/products/images";
-
         if (fieldName === "video") {
           folder = "just_gold/products/videos";
         } else if (
@@ -295,29 +297,26 @@ const uploadToImageKit = async (req, res, next) => {
           folder = "just_gold/products/variants";
         }
 
-        // Upload to ImageKit
-        const uploadPromise = imageKit.upload({
-          file: file.buffer,
-          fileName: file.originalname || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          folder: folder,
-          isPrivateFile: false,
-          useUniqueFileName: true,
-        }).then((result) => {
-          console.log("[IMAGEKIT UPLOAD] Success:", {
-            fileName: result.name,
-            fileId: result.fileId,
-            url: result.url,
-            folder: folder,
-          });
-          
-          // Store ImageKit result in file object
-          file.imagekit = result;
-          file.path = result.url;
-          file.filename = result.name;
-          return result;
+        const extFromMime = (file.mimetype && file.mimetype.split("/")[1]) || "bin";
+        const unique = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const fileName = file.originalname || `${unique}.${extFromMime}`;
+        const key = `${folder}/${fileName}`;
+
+        const uploadPromise = s3.send(new PutObjectCommand({
+          Bucket: process.env.S3_BUCKET,
+          Key: key,
+          Body: file.buffer,
+          ContentType: file.mimetype,
+        })).then(() => {
+          console.log("[S3 UPLOAD] Success:", { key, folder });
+          // Attach S3/ImageKit data to file for downstream handlers
+          file.imagekitKey = key; // store key only
+          file.path = endpoint ? `${endpoint}/${key}` : null; // CDN URL for response consumption
+          file.filename = fileName;
+          return { key };
         }).catch((error) => {
-          console.error("[IMAGEKIT UPLOAD] Error:", {
-            fieldName: fieldName,
+          console.error("[S3 UPLOAD] Error:", {
+            fieldName,
             filename: file.originalname,
             error: error.message,
           });
@@ -332,22 +331,27 @@ const uploadToImageKit = async (req, res, next) => {
     }
 
     await Promise.all(uploadPromises);
-    console.log("[UPLOAD DEBUG] All files uploaded to ImageKit successfully");
+    console.log("[UPLOAD DEBUG] All files uploaded to S3 (ImageKit CDN) successfully");
     next();
   } catch (error) {
-    console.error("ImageKit upload error:", {
+    const awsMeta = error?.$metadata || {};
+    console.error("[S3 UPLOAD] Fatal error:", {
       message: error.message,
+      code: error.name || error.code,
       field: error._fieldName,
       filename: error._filename,
       mimetype: error._mimetype,
+      aws: awsMeta,
+      stack: error.stack,
     });
     return res.status(500).json({
-      message: "ImageKit rejected the uploaded file. Ensure you're sending a valid image/video file via form-data.",
+      message: "ImageKit/S3 upload failed. Ensure you're sending a valid image/video file via form-data.",
       details: {
         field: error._fieldName || null,
         filename: error._filename || null,
         mimetype: error._mimetype || null,
         imagekit_error: error.message,
+        aws: awsMeta,
       },
     });
   }
@@ -361,6 +365,8 @@ router.put("/products/:id", uploadHandler, controller.updateProduct);
 router.post("/products/:id/upload", uploadHandler, controller.updateProduct);
 router.delete("/products/:id", controller.deleteProduct);
 router.get("/products/:id-:slug", controller.getProductDetail);
+// Backward-compat: legacy singular route
+router.get("/product/:id-:slug", controller.getProductDetail);
 
 // Product collection (list all)
 router.get("/products", controller.getProducts);

@@ -1,4 +1,4 @@
-const ImageKit = require("@imagekit/nodejs").default;
+const ImageKit = require("@imagekit/nodejs");
 
 /* =========================================================
    IMAGEKIT CONFIGURATION
@@ -7,10 +7,13 @@ const ImageKit = require("@imagekit/nodejs").default;
    - S3 backend with ImageKit CDN
 ========================================================= */
 
-const imageKit = new ImageKit({
+// Create ImageKit instance for file uploads to ImageKit
+const imageKitInstance = new ImageKit({
   publicKey: process.env.IMAGEKIT_PUBLIC_KEY || "",
   privateKey: process.env.IMAGEKIT_PRIVATE_KEY || "",
   urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT || "https://ik.imagekit.io/dvagrhc2w",
 });
 
-module.exports = imageKit;
+// The instance should have the upload method from @imagekit/nodejs v7+
+// If not available directly, we'll use the REST API approach
+module.exports = imageKitInstance;
