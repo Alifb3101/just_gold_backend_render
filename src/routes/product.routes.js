@@ -368,6 +368,12 @@ router.get("/products/:id-:slug", controller.getProductDetail);
 // Backward-compat: legacy singular route
 router.get("/product/:id-:slug", controller.getProductDetail);
 
+// Backward-compat: legacy singular CRUD endpoints
+router.post("/product", uploadHandler, controller.createProduct);
+router.put("/product/:id", uploadHandler, controller.updateProduct);
+router.delete("/product/:id", controller.deleteProduct);
+router.get("/product", controller.getProducts);
+
 // Product collection (list all)
 router.get("/products", controller.getProducts);
 
