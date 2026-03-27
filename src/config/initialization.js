@@ -16,6 +16,7 @@ const initializationLog = (...args) => {
  * but run once at startup instead of on every request
  */
 const ensureGuestCartSchema = async () => {
+  // Avoid starving the pool: only grab a client when available quickly
   const client = await pool.connect();
   try {
     initializationLog("🔄 Initializing guest cart schema...");
