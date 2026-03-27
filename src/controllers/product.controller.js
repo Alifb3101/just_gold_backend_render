@@ -817,14 +817,14 @@ exports.createProduct = async (req, res, next) => {
       const colorPanelFile = req.files?.[colorPanelImageKey]?.[0] || null;
 
       // Get Cloudinary URLs instead of local paths
-      const { url: mainImagePath, key: mainImageKey } = deriveMediaParams(colorFile);
+      const { url: mainImagePath, key: mainImageKey, provider: mainMediaProvider } = deriveMediaParams(colorFile);
 
       if (!firstVariantMainImageUrl && mainImagePath) {
         firstVariantMainImageUrl = mainImagePath;
         firstVariantMainImageKey = mainImageKey;
       }
 
-      const { url: secondaryImagePath, key: secondaryImageKey } =
+      const { url: secondaryImagePath, key: secondaryImageKey, provider: secondaryMediaProvider } =
         deriveMediaParams(secondaryColorFile);
 
       const colorType = variant.color_type || variant.colorType || null;
@@ -849,11 +849,13 @@ exports.createProduct = async (req, res, next) => {
 
       const { colorPanelType, colorPanelValue } = colorPanelValidation;
 
+      const variantMediaProvider = mainMediaProvider || secondaryMediaProvider || null;
+
       await client.query(
         `
         INSERT INTO product_variants
-        (product_id, shade, color_type, color_panel_type, color_panel_value, stock, main_image, secondary_image, main_image_key, secondary_image_key, price, discount_price, variant_model_no)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        (product_id, shade, color_type, color_panel_type, color_panel_value, stock, main_image, secondary_image, main_image_key, secondary_image_key, media_provider, price, discount_price, variant_model_no)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
         `,
         [
           productId,
@@ -866,6 +868,7 @@ exports.createProduct = async (req, res, next) => {
           secondaryImagePath,
           mainImageKey,
           secondaryImageKey,
+          variantMediaProvider,
           variant.price || null,
           variant.discount_price || null,
           variant.variant_model_no || null
@@ -1237,12 +1240,12 @@ exports.updateProduct = async (req, res, next) => {
         null;
       const colorPanelFile = req.files?.[colorPanelImageKey]?.[0] || null;
 
-      const { url: mainImagePath, key: mainImageKey } = deriveMediaParams(
+      const { url: mainImagePath, key: mainImageKey, provider: mainMediaProvider } = deriveMediaParams(
         colorFile,
         variant.main_image || variant.mainImage || null
       );
 
-      const { url: secondaryImagePath, key: secondaryImageKey } = deriveMediaParams(
+      const { url: secondaryImagePath, key: secondaryImageKey, provider: secondaryMediaProvider } = deriveMediaParams(
         secondaryColorFile,
         variant.secondary_image || variant.secondaryImage || null
       );
@@ -1302,6 +1305,8 @@ exports.updateProduct = async (req, res, next) => {
           }
 
           // Update variant
+          const variantMediaProvider = mainMediaProvider || secondaryMediaProvider || null;
+
           await client.query(
             `
             UPDATE product_variants SET
@@ -1314,10 +1319,11 @@ exports.updateProduct = async (req, res, next) => {
               secondary_image = COALESCE($7, secondary_image),
               main_image_key = COALESCE($8, main_image_key),
               secondary_image_key = COALESCE($9, secondary_image_key),
-              price = COALESCE($10, price),
-              discount_price = COALESCE($11, discount_price),
-              variant_model_no = COALESCE($12, variant_model_no)
-            WHERE id = $13 AND product_id = $14
+              media_provider = COALESCE($10, media_provider),
+              price = COALESCE($11, price),
+              discount_price = COALESCE($12, discount_price),
+              variant_model_no = COALESCE($13, variant_model_no)
+            WHERE id = $14 AND product_id = $15
             `,
             [
               variant.color || null,
@@ -1329,6 +1335,7 @@ exports.updateProduct = async (req, res, next) => {
               secondaryImagePath,
               mainImageKey,
               secondaryImageKey,
+              variantMediaProvider,
               variant.price || null,
               variant.discount_price || null,
               variant.variant_model_no || null,
@@ -1340,11 +1347,13 @@ exports.updateProduct = async (req, res, next) => {
       } else {
         /* -------- ADD NEW VARIANT -------- */
 
+        const variantMediaProvider = mainMediaProvider || secondaryMediaProvider || null;
+
         await client.query(
           `
           INSERT INTO product_variants
-          (product_id, shade, color_type, color_panel_type, color_panel_value, stock, main_image, secondary_image, main_image_key, secondary_image_key, price, discount_price, variant_model_no)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          (product_id, shade, color_type, color_panel_type, color_panel_value, stock, main_image, secondary_image, main_image_key, secondary_image_key, media_provider, price, discount_price, variant_model_no)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
           `,
           [
             productId,
@@ -1357,6 +1366,7 @@ exports.updateProduct = async (req, res, next) => {
             secondaryImagePath,
             mainImageKey,
             secondaryImageKey,
+            variantMediaProvider,
             variant.price || null,
             variant.discount_price || null,
             variant.variant_model_no || null,
