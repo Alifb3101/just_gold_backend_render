@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const multer = require("multer");
 const controller = require("../controllers/product.controller");
+const pool = require("../config/db");
 
 /* =========================================================
    CLOUDINARY UPLOAD CONFIGURATION
@@ -126,15 +127,43 @@ const pickProviderOverride = (req) => {
   return null;
 };
 
-const getMediaProvider = (req = null) => {
+const getMediaProvider = async (req = null) => {
   const override = pickProviderOverride(req);
+  if (override?.value) {
+    console.log(`[MEDIA PROVIDER] Using: ${override.value}`, {
+      fromEnv: process.env.MEDIA_PROVIDER,
+      override: override.raw,
+      resolvedOverride: override.value,
+    });
+    return override.value;
+  }
+
+  // Fallback to product-level provider when product id is present
+  let productProvider = null;
+  const idRaw = req?.params?.id;
+  if (idRaw) {
+    const productId = Number(idRaw);
+    if (Number.isInteger(productId)) {
+      try {
+        const result = await pool.query(
+          `SELECT media_provider FROM products WHERE id = $1 LIMIT 1`,
+          [productId]
+        );
+        productProvider = normalizeProviderName(result.rows?.[0]?.media_provider);
+      } catch (err) {
+        console.error("[MEDIA PROVIDER] Failed to read product media_provider", err.message);
+      }
+    }
+  }
+
   const envProvider = normalizeProviderName(process.env.MEDIA_PROVIDER);
-  const provider = override?.value || envProvider || 'cloudinary';
+  const provider = productProvider || envProvider || 'cloudinary';
 
   console.log(`[MEDIA PROVIDER] Using: ${provider}`, {
     fromEnv: process.env.MEDIA_PROVIDER,
     override: override?.raw || null,
     resolvedOverride: override?.value || null,
+    productProvider: productProvider || null,
   });
 
   return provider;
@@ -142,7 +171,7 @@ const getMediaProvider = (req = null) => {
 
 const uploadHandler = (req, res, next) => {
   upload(req, res, async (err) => {
-    const provider = getMediaProvider(req);
+    const provider = await getMediaProvider(req);
     console.log("[UPLOAD DEBUG] Request received", {
       method: req.method,
       path: req.path,
