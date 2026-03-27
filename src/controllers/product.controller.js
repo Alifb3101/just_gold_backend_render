@@ -498,6 +498,7 @@ exports.getProductDetail = async (req, res, next) => {
         main_image_key,
         secondary_image,
         secondary_image_key,
+        media_provider,
         price,
         discount_price,
         variant_model_no
@@ -538,20 +539,42 @@ exports.getProductDetail = async (req, res, next) => {
       return !isSyntheticDefault;
     });
 
+    const resolvedMedia = mediaResult.rows.map((media) => ({
+      ...media,
+      image_url: resolveMediaUrl(media.image_url, media.image_key, media.media_provider, 'product'),
+    }));
+
+    const primaryVariant = visibleVariants[0] || null;
+    const primaryVariantResolved = primaryVariant
+      ? {
+          main_image: resolveMediaUrl(primaryVariant.main_image, primaryVariant.main_image_key, primaryVariant.media_provider, 'product'),
+          secondary_image: resolveMediaUrl(primaryVariant.secondary_image, primaryVariant.secondary_image_key, primaryVariant.media_provider, 'product'),
+          media_provider: primaryVariant.media_provider,
+        }
+      : null;
+
+    const firstMediaImage = resolvedMedia.find((m) => m.media_type === 'image') || null;
+
+    const baseThumbnail = resolveMediaUrl(product.thumbnail, product.thumbnail_key, product.media_provider, 'thumbnail');
+    const baseAfterimage = resolveMediaUrl(product.afterimage, product.afterimage_key, product.media_provider, 'product');
+
+    const finalThumbnail = primaryVariantResolved?.main_image || baseThumbnail;
+    const finalAfterimage =
+      primaryVariantResolved?.secondary_image ||
+      firstMediaImage?.image_url ||
+      baseAfterimage;
+
     const productPayload = {
       ...product,
       tags: product.tags || [],
-      thumbnail: resolveMediaUrl(product.thumbnail, product.thumbnail_key, product.media_provider, 'thumbnail'),
-      afterimage: resolveMediaUrl(product.afterimage, product.afterimage_key, product.media_provider, 'product'),
+      thumbnail: finalThumbnail,
+      afterimage: finalAfterimage,
       variants: visibleVariants.map((variant) => ({
         ...variant,
         main_image: resolveMediaUrl(variant.main_image, variant.main_image_key, variant.media_provider, 'product'),
         secondary_image: resolveMediaUrl(variant.secondary_image, variant.secondary_image_key, variant.media_provider, 'product'),
       })),
-      media: mediaResult.rows.map((media) => ({
-        ...media,
-        image_url: resolveMediaUrl(media.image_url, media.image_key, media.media_provider, 'product'),
-      })),
+      media: resolvedMedia,
     };
 
     if (requestedSlug && normalizedRequestedSlug !== normalizedProductSlug) {
