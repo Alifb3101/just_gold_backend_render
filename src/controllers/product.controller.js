@@ -1,5 +1,7 @@
 const pool = require("../config/db");
 const { deleteMultipleFromCloudinary } = require("../config/cloudinary");
+const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const s3 = require("../config/s3");
 const { getMediaUrl, resolveMediaUrl } = require("../services/media.service");
 const {
   buildProductsQuery,
@@ -255,6 +257,26 @@ const isValidGradient = (value) => {
   return /(linear|radial|conic|repeating-linear|repeating-radial)-gradient\s*\(.+\)/i.test(
     value.trim()
   );
+};
+
+// Batch delete objects from S3 (ImageKit-backed uploads)
+const deleteFromS3 = async (keys = []) => {
+  const filtered = (keys || []).filter(Boolean);
+  if (!filtered.length) return;
+
+  const bucket = process.env.S3_BUCKET;
+  if (!bucket) {
+    console.warn("[S3 DELETE] Missing S3_BUCKET env; skip delete", { count: filtered.length });
+    return;
+  }
+
+  const deletions = filtered.map((Key) =>
+    s3.send(new DeleteObjectCommand({ Bucket: bucket, Key })).catch((err) => {
+      console.error("[S3 DELETE] Failed", { Key, message: err.message });
+    })
+  );
+
+  await Promise.all(deletions);
 };
 
 const validateColorPanel = (rawType, rawValue, { requireValue, uploadedUrl }) => {
@@ -1433,12 +1455,12 @@ exports.deleteProduct = async (req, res, next) => {
     /* -------- Get All Image/Video URLs for Cloudinary Deletion -------- */
 
     const mediaResult = await client.query(
-      `SELECT image_url FROM product_images WHERE product_id = $1`,
+      `SELECT image_url, image_key, media_provider FROM product_images WHERE product_id = $1`,
       [id]
     );
 
     const variantResult = await client.query(
-      `SELECT main_image, secondary_image FROM product_variants WHERE product_id = $1`,
+      `SELECT main_image, secondary_image, main_image_key, secondary_image_key, media_provider FROM product_variants WHERE product_id = $1`,
       [id]
     );
 
@@ -1450,16 +1472,34 @@ exports.deleteProduct = async (req, res, next) => {
         .filter(Boolean)
     ];
 
+    const s3Keys = [
+      ...mediaResult.rows
+        .filter((row) => (row.media_provider || '').toLowerCase() === 'imagekit')
+        .map((row) => row.image_key)
+        .filter(Boolean),
+      ...variantResult.rows
+        .filter((row) => (row.media_provider || '').toLowerCase() === 'imagekit')
+        .map((row) => [row.main_image_key, row.secondary_image_key])
+        .flat()
+        .filter(Boolean),
+    ];
+
     /* -------- Delete Variants (Cascade) -------- */
 
     await client.query(
       `DELETE FROM product_variants WHERE product_id = $1`,
       [id]
     );
-/* -------- Delete Files from Cloudinary -------- */
+    /* -------- Delete Files from Cloudinary -------- */
 
     if (allMediaUrls.length > 0) {
       await deleteMultipleFromCloudinary(allMediaUrls);
+    }
+
+    /* -------- Delete Files from S3 (ImageKit) -------- */
+
+    if (s3Keys.length > 0) {
+      await deleteFromS3(s3Keys);
     }
 
     
