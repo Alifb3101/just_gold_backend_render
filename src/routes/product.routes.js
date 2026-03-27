@@ -120,7 +120,16 @@ const getMediaProvider = (req = null) => {
   const normalized = provider.toLowerCase();
   console.log(`[MEDIA PROVIDER] Using: ${normalized}`, {
     fromEnv: process.env.MEDIA_PROVIDER,
-    fromRequest: req ? (req.query?.mediaProvider || req.body?.mediaProvider || req.headers['x-media-provider']) : null,
+    fromRequest: req
+      ? (
+          req.query?.mediaProvider ||
+          req.query?.provider ||
+          req.body?.mediaProvider ||
+          req.body?.provider ||
+          req.headers['x-media-provider'] ||
+          req.headers['x-provider']
+        )
+      : null,
   });
   return normalized;
 };
