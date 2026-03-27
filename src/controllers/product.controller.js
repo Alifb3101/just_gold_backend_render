@@ -488,8 +488,7 @@ exports.getProductDetail = async (req, res, next) => {
 
     const mediaResult = await pool.query(
       `
-      SELECT id, image_url, media_type
-        , image_key
+      SELECT id, image_url, media_type, image_key, media_provider
       FROM product_images
       WHERE product_id = $1
       ORDER BY id ASC
@@ -727,28 +726,30 @@ exports.createProduct = async (req, res, next) => {
         secondGalleryImageKey = imageKey;
       }
 
+      const { provider: mediaProvider } = deriveMediaParams(file);
+
       await client.query(
         `
         INSERT INTO product_images
-        (product_id, image_url, image_key, media_type)
-        VALUES ($1,$2,$3,$4)
+        (product_id, image_url, image_key, media_type, media_provider)
+        VALUES ($1,$2,$3,$4,$5)
         `,
-        [productId, imageUrl, imageKey, "image"]
+        [productId, imageUrl, imageKey, "image", mediaProvider || null]
       );
     }
 
     /* -------- Save Product Video (Cloudinary URL) -------- */
 
     if (videoFiles.length > 0) {
-      const { url: videoUrl, key: videoKey } = deriveMediaParams(videoFiles[0]);
+      const { url: videoUrl, key: videoKey, provider: mediaProvider } = deriveMediaParams(videoFiles[0]);
 
       await client.query(
         `
         INSERT INTO product_images
-        (product_id, image_url, image_key, media_type)
-        VALUES ($1,$2,$3,$4)
+        (product_id, image_url, image_key, media_type, media_provider)
+        VALUES ($1,$2,$3,$4,$5)
         `,
-        [productId, videoUrl, videoKey, "video"]
+        [productId, videoUrl, videoKey, "video", mediaProvider || null]
       );
     }
 
@@ -1103,29 +1104,29 @@ exports.updateProduct = async (req, res, next) => {
 
     // Save new gallery images
     for (let file of galleryFiles) {
-      const { url: imageUrl, key: imageKey } = deriveMediaParams(file);
+      const { url: imageUrl, key: imageKey, provider: mediaProvider } = deriveMediaParams(file);
       
       await client.query(
         `
         INSERT INTO product_images
-        (product_id, image_url, image_key, media_type)
-        VALUES ($1, $2, $3, $4)
+        (product_id, image_url, image_key, media_type, media_provider)
+        VALUES ($1, $2, $3, $4, $5)
         `,
-        [productId, imageUrl, imageKey, "image"]
+        [productId, imageUrl, imageKey, "image", mediaProvider || null]
       );
     }
 
     // Save new video
     if (videoFiles.length > 0) {
-      const { url: videoUrl, key: videoKey } = deriveMediaParams(videoFiles[0]);
+      const { url: videoUrl, key: videoKey, provider: mediaProvider } = deriveMediaParams(videoFiles[0]);
       
       await client.query(
         `
         INSERT INTO product_images
-        (product_id, image_url, image_key, media_type)
-        VALUES ($1, $2, $3, $4)
+        (product_id, image_url, image_key, media_type, media_provider)
+        VALUES ($1, $2, $3, $4, $5)
         `,
-        [productId, videoUrl, videoKey, "video"]
+        [productId, videoUrl, videoKey, "video", mediaProvider || null]
       );
     }
 
