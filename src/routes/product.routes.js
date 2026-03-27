@@ -146,10 +146,34 @@ const getMediaProvider = async (req = null) => {
     if (Number.isInteger(productId)) {
       try {
         const result = await pool.query(
-          `SELECT media_provider FROM products WHERE id = $1 LIMIT 1`,
+          `SELECT media_provider, thumbnail, afterimage FROM products WHERE id = $1 LIMIT 1`,
           [productId]
         );
         productProvider = normalizeProviderName(result.rows?.[0]?.media_provider);
+
+        // Infer provider from existing media URLs if not stored
+        if (!productProvider && result.rows?.[0]) {
+          const { thumbnail, afterimage } = result.rows[0];
+          const inferFromUrl = (url) => {
+            if (!url || typeof url !== 'string') return null;
+            const lower = url.toLowerCase();
+            if (lower.includes('res.cloudinary.com')) return 'cloudinary';
+            if (lower.includes('imagekit.io')) return 'imagekit';
+            return null;
+          };
+
+          productProvider = inferFromUrl(thumbnail) || inferFromUrl(afterimage) || null;
+
+          // If still unknown, look at product_images
+          if (!productProvider) {
+            const mediaRow = await pool.query(
+              `SELECT image_url FROM product_images WHERE product_id = $1 ORDER BY id DESC LIMIT 1`,
+              [productId]
+            );
+            const mediaUrl = mediaRow.rows?.[0]?.image_url || null;
+            productProvider = inferFromUrl(mediaUrl) || null;
+          }
+        }
       } catch (err) {
         console.error("[MEDIA PROVIDER] Failed to read product media_provider", err.message);
       }
