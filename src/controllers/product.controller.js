@@ -259,6 +259,13 @@ const isValidGradient = (value) => {
   );
 };
 
+const normalizeProviderName = (value) => {
+  if (!value) return null;
+  const lower = String(value).trim().toLowerCase();
+  if (lower === "cloudinary" || lower === "imagekit") return lower;
+  return null;
+};
+
 // Batch delete objects from S3 (ImageKit-backed uploads)
 const deleteFromS3 = async (keys = []) => {
   const filtered = (keys || []).filter(Boolean);
@@ -1044,6 +1051,11 @@ exports.updateProduct = async (req, res, next) => {
       ingredients,
       thumbnail,
       afterimage,
+      mediaProvider,
+      media_provider,
+      provider,
+      storageProvider,
+      storage_provider,
       tags: rawTags,
       tag: legacyTag,
       variants,
@@ -1060,6 +1072,10 @@ exports.updateProduct = async (req, res, next) => {
     }
 
     /* -------- Update Product Basic Info -------- */
+
+    const providerOverride = normalizeProviderName(
+      mediaProvider || media_provider || provider || storageProvider || storage_provider
+    );
 
     const slug = name
       ? name
@@ -1085,8 +1101,9 @@ exports.updateProduct = async (req, res, next) => {
         ingredients = COALESCE($11, ingredients),
         thumbnail = COALESCE($12, thumbnail),
         afterimage = COALESCE($13, afterimage),
-        tags = COALESCE($14, tags)
-      WHERE id = $15
+        tags = COALESCE($14, tags),
+        media_provider = COALESCE($15, media_provider)
+      WHERE id = $16
       `,
       [
         name || null,
@@ -1103,6 +1120,7 @@ exports.updateProduct = async (req, res, next) => {
         thumbnail || null,
         afterimage || null,
         tagsValidation.shouldUpdate ? tagsValidation.tags : null,
+        providerOverride,
         productId,
       ]
     );
