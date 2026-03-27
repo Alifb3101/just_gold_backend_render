@@ -89,49 +89,55 @@ const validateFileForCloudinary = (fieldName, file) => {
    - MEDIA_PROVIDER=cloudinary (or unset) → Cloudinary uploads
 ========================================================= */
 
-const getMediaProvider = (req = null) => {
-  let provider = process.env.MEDIA_PROVIDER || 'cloudinary';
-  
-  // Allow override from request (highest priority)
-  if (req) {
-    // Check query parameter
-    if (req.query?.mediaProvider) {
-      provider = req.query.mediaProvider;
-    }
-    else if (req.query?.provider) {
-      provider = req.query.provider;
-    }
-    // Check request body
-    else if (req.body?.mediaProvider) {
-      provider = req.body.mediaProvider;
-    }
-    else if (req.body?.provider) {
-      provider = req.body.provider;
-    }
-    // Check header
-    else if (req.headers['x-media-provider']) {
-      provider = req.headers['x-media-provider'];
-    }
-    else if (req.headers['x-provider']) {
-      provider = req.headers['x-provider'];
+const normalizeProviderName = (value) => {
+  if (!value) return null;
+  const lower = String(value).trim().toLowerCase();
+  if (lower === 'cloudinary' || lower === 'imagekit') return lower;
+  return null;
+};
+
+const pickProviderOverride = (req) => {
+  if (!req) return null;
+
+  const candidates = [
+    req.query?.mediaProvider,
+    req.query?.provider,
+    req.query?.media_provider,
+    req.query?.storageProvider,
+    req.query?.storage_provider,
+    req.body?.mediaProvider,
+    req.body?.provider,
+    req.body?.media_provider,
+    req.body?.storageProvider,
+    req.body?.storage_provider,
+    req.headers['x-media-provider'],
+    req.headers['x-provider'],
+    req.headers['x-media_provider'],
+    req.headers['x-storage-provider'],
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeProviderName(candidate);
+    if (normalized) {
+      return { value: normalized, raw: candidate };
     }
   }
-  
-  const normalized = provider.toLowerCase();
-  console.log(`[MEDIA PROVIDER] Using: ${normalized}`, {
+
+  return null;
+};
+
+const getMediaProvider = (req = null) => {
+  const override = pickProviderOverride(req);
+  const envProvider = normalizeProviderName(process.env.MEDIA_PROVIDER);
+  const provider = override?.value || envProvider || 'cloudinary';
+
+  console.log(`[MEDIA PROVIDER] Using: ${provider}`, {
     fromEnv: process.env.MEDIA_PROVIDER,
-    fromRequest: req
-      ? (
-          req.query?.mediaProvider ||
-          req.query?.provider ||
-          req.body?.mediaProvider ||
-          req.body?.provider ||
-          req.headers['x-media-provider'] ||
-          req.headers['x-provider']
-        )
-      : null,
+    override: override?.raw || null,
+    resolvedOverride: override?.value || null,
   });
-  return normalized;
+
+  return provider;
 };
 
 const uploadHandler = (req, res, next) => {
