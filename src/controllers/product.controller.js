@@ -627,11 +627,38 @@ exports.createProduct = async (req, res, next) => {
       });
     }
 
-    const slug = name
-      .toLowerCase()
-      .trim()
-      .replace(/\s+/g, "-")
-      .replace(/[^\w-]+/g, "");
+    // Generate a unique slug (avoid 409 conflicts on duplicate names)
+    const generateUniqueSlug = async (baseName) => {
+      const baseSlug = baseName
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, "-")
+        .replace(/[^\w-]+/g, "");
+
+      let candidate = baseSlug || "product";
+      let counter = 1;
+
+      // Use the same transaction client to avoid race conditions
+      // Try suffix -2, -3, ... until free
+      // (baseSlug is used if free; else append incremental counter)
+      // Limit loop to prevent infinite attempts
+      while (true) {
+        const exists = await client.query(
+          `SELECT 1 FROM products WHERE slug = $1 LIMIT 1`,
+          [candidate]
+        );
+
+        if (exists.rowCount === 0) return candidate;
+
+        counter += 1;
+        candidate = `${baseSlug}-${counter}`;
+        if (counter > 5000) {
+          throw new Error("Unable to generate unique slug after many attempts");
+        }
+      }
+    };
+
+    const slug = await generateUniqueSlug(name);
 
     /* -------- Insert Product -------- */
 
@@ -858,7 +885,8 @@ exports.createProduct = async (req, res, next) => {
 
     res.status(201).json({
       message: "Product Created Successfully",
-      product_id: productId
+      product_id: productId,
+      id: productId
     });
 
   } catch (err) {
@@ -903,13 +931,28 @@ exports.updateProduct = async (req, res, next) => {
 
     await ensureProductTagsColumn(client);
 
-    const { id } = req.params;
+    // Accept id from multiple places; ignore literal "undefined" param
+    const paramIdRaw = req.params?.id;
+    const bodyIdRaw = req.body?.product_id || req.body?.productId || req.body?.id;
+    const queryIdRaw = req.query?.product_id || req.query?.productId || req.query?.id;
+
+    const firstValidId = [paramIdRaw, bodyIdRaw, queryIdRaw]
+      .filter((v) => v !== undefined && v !== null && v !== "undefined" && v !== "null" && `${v}`.trim() !== "")
+      .map((v) => Number(v))
+      .find((v) => Number.isInteger(v));
+
+    const productId = firstValidId;
+
+    if (!Number.isInteger(productId)) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ message: "Invalid product id" });
+    }
 
     /* -------- Validate Product Exists -------- */
 
     const existingProduct = await client.query(
       `SELECT * FROM products WHERE id = $1`,
-      [id]
+      [productId]
     );
 
     if (!existingProduct.rows.length) {
@@ -988,7 +1031,7 @@ exports.updateProduct = async (req, res, next) => {
         thumbnail || null,
         afterimage || null,
         tagsValidation.shouldUpdate ? tagsValidation.tags : null,
-        id,
+        productId,
       ]
     );
 
@@ -999,7 +1042,7 @@ exports.updateProduct = async (req, res, next) => {
 
     await syncAutoSectionsByCategory({
       client,
-      productId: id,
+      productId,
       categoryId: effectiveCategoryId,
     });
 
@@ -1015,7 +1058,7 @@ exports.updateProduct = async (req, res, next) => {
       // Get URLs for Cloudinary deletion
       const mediaToDelete = await client.query(
         `SELECT image_url FROM product_images WHERE id = ANY($1) AND product_id = $2`,
-        [parsedDeleteMediaIds, id]
+        [parsedDeleteMediaIds, productId]
       );
 
       const urlsToDelete = mediaToDelete.rows.map((row) => row.image_url).filter(Boolean);
@@ -1023,7 +1066,7 @@ exports.updateProduct = async (req, res, next) => {
       // Delete from database
       await client.query(
         `DELETE FROM product_images WHERE id = ANY($1) AND product_id = $2`,
-        [parsedDeleteMediaIds, id]
+        [parsedDeleteMediaIds, productId]
       );
 
       // Delete from Cloudinary
@@ -1054,31 +1097,35 @@ exports.updateProduct = async (req, res, next) => {
         SET thumbnail = $1, thumbnail_key = $2, media_provider = $3
         WHERE id = $4
         `,
-        [imageUrl, imageKey, provider || 'imagekit', id]
+        [imageUrl, imageKey, provider || 'imagekit', productId]
       );
     }
 
     // Save new gallery images
     for (let file of galleryFiles) {
+      const { url: imageUrl, key: imageKey } = deriveMediaParams(file);
+      
       await client.query(
         `
         INSERT INTO product_images
-        (product_id, image_url, media_type)
-        VALUES ($1, $2, $3)
+        (product_id, image_url, image_key, media_type)
+        VALUES ($1, $2, $3, $4)
         `,
-        [id, file.path || file.cloudinary?.secure_url, "image"]
+        [productId, imageUrl, imageKey, "image"]
       );
     }
 
     // Save new video
     if (videoFiles.length > 0) {
+      const { url: videoUrl, key: videoKey } = deriveMediaParams(videoFiles[0]);
+      
       await client.query(
         `
         INSERT INTO product_images
-        (product_id, image_url, media_type)
-        VALUES ($1, $2, $3)
+        (product_id, image_url, image_key, media_type)
+        VALUES ($1, $2, $3, $4)
         `,
-        [id, videoFiles[0].path || videoFiles[0].cloudinary?.secure_url, "video"]
+        [productId, videoUrl, videoKey, "video"]
       );
     }
 
@@ -1094,7 +1141,7 @@ exports.updateProduct = async (req, res, next) => {
       // Get variant images for Cloudinary deletion
       const variantsToDelete = await client.query(
         `SELECT main_image, secondary_image FROM product_variants WHERE id = ANY($1) AND product_id = $2`,
-        [parsedDeleteVariantIds, id]
+        [parsedDeleteVariantIds, productId]
       );
 
       const variantUrlsToDelete = variantsToDelete.rows
@@ -1105,7 +1152,7 @@ exports.updateProduct = async (req, res, next) => {
       // Delete from database
       await client.query(
         `DELETE FROM product_variants WHERE id = ANY($1) AND product_id = $2`,
-        [parsedDeleteVariantIds, id]
+        [parsedDeleteVariantIds, productId]
       );
 
       // Delete from Cloudinary
@@ -1182,7 +1229,7 @@ exports.updateProduct = async (req, res, next) => {
         // Get old images for potential Cloudinary deletion
         const oldVariant = await client.query(
           `SELECT main_image, secondary_image FROM product_variants WHERE id = $1 AND product_id = $2`,
-          [variant.id, id]
+          [variant.id, productId]
         );
 
         if (oldVariant.rows.length > 0) {
@@ -1234,7 +1281,7 @@ exports.updateProduct = async (req, res, next) => {
               variant.discount_price || null,
               variant.variant_model_no || null,
               variant.id,
-              id,
+              productId,
             ]
           );
         }
@@ -1248,7 +1295,7 @@ exports.updateProduct = async (req, res, next) => {
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
           `,
           [
-            id,
+            productId,
             variant.color,
             colorType,
             colorPanelType,
@@ -1272,17 +1319,17 @@ exports.updateProduct = async (req, res, next) => {
 
     const updatedProduct = await pool.query(
       `SELECT * FROM products WHERE id = $1`,
-      [id]
+      [productId]
     );
 
     const updatedVariants = await pool.query(
       `SELECT * FROM product_variants WHERE product_id = $1`,
-      [id]
+      [productId]
     );
 
     const updatedMedia = await pool.query(
       `SELECT * FROM product_images WHERE product_id = $1`,
-      [id]
+      [productId]
     );
 
     const responseProduct = {
