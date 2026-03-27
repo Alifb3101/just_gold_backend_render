@@ -98,13 +98,22 @@ const getMediaProvider = (req = null) => {
     if (req.query?.mediaProvider) {
       provider = req.query.mediaProvider;
     }
+    else if (req.query?.provider) {
+      provider = req.query.provider;
+    }
     // Check request body
     else if (req.body?.mediaProvider) {
       provider = req.body.mediaProvider;
     }
+    else if (req.body?.provider) {
+      provider = req.body.provider;
+    }
     // Check header
     else if (req.headers['x-media-provider']) {
       provider = req.headers['x-media-provider'];
+    }
+    else if (req.headers['x-provider']) {
+      provider = req.headers['x-provider'];
     }
   }
   

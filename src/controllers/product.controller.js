@@ -856,10 +856,17 @@ exports.createProduct = async (req, res, next) => {
         ? colorPanelFile.path || colorPanelFile.cloudinary?.secure_url
         : null;
 
+      const wantsColorPanel =
+        colorPanelFile ||
+        variant.color_panel_type ||
+        variant.colorPanelType ||
+        variant.color_panel_value ||
+        variant.colorPanelValue;
+
       const colorPanelValidation = validateColorPanel(
         variant.color_panel_type || variant.colorPanelType,
         variant.color_panel_value || variant.colorPanelValue,
-        { requireValue: true, uploadedUrl: colorPanelUploadedUrl }
+        { requireValue: !!wantsColorPanel, uploadedUrl: colorPanelUploadedUrl }
       );
 
       if (colorPanelValidation.error) {
@@ -1279,10 +1286,17 @@ exports.updateProduct = async (req, res, next) => {
         ? colorPanelFile.path || colorPanelFile.cloudinary?.secure_url
         : null;
 
+      const wantsColorPanel =
+        colorPanelFile ||
+        variant.color_panel_type ||
+        variant.colorPanelType ||
+        variant.color_panel_value ||
+        variant.colorPanelValue;
+
       const colorPanelValidation = validateColorPanel(
         variant.color_panel_type || variant.colorPanelType,
         variant.color_panel_value || variant.colorPanelValue,
-        { requireValue: !variant.id, uploadedUrl: colorPanelUploadedUrl }
+        { requireValue: !!wantsColorPanel, uploadedUrl: colorPanelUploadedUrl }
       );
 
       if (colorPanelValidation.error) {
