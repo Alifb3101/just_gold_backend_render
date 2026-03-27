@@ -700,6 +700,7 @@ exports.createProduct = async (req, res, next) => {
        ORGANIZE FILES (Cloudinary URLs)
     ===================================================== */
 
+    const imageFiles = req.files?.image || [];
     const galleryFiles = [
       ...(req.files?.gallery || []),
       ...(req.files?.media || [])
@@ -712,6 +713,21 @@ exports.createProduct = async (req, res, next) => {
     let secondGalleryImageKey = null;
     let firstVariantMainImageUrl = null;
     let firstVariantMainImageKey = null;
+
+    /* -------- Save Direct Image Uploads (as media) -------- */
+
+    for (let file of imageFiles) {
+      const { url: imageUrl, key: imageKey, provider: mediaProvider } = deriveMediaParams(file);
+
+      await client.query(
+        `
+        INSERT INTO product_images
+        (product_id, image_url, image_key, media_type, media_provider)
+        VALUES ($1,$2,$3,$4,$5)
+        `,
+        [productId, imageUrl, imageKey, "image", mediaProvider || null]
+      );
+    }
 
     /* -------- Save Gallery (Cloudinary URLs) -------- */
 
@@ -1100,6 +1116,19 @@ exports.updateProduct = async (req, res, next) => {
         `,
         [imageUrl, imageKey, provider || 'imagekit', productId]
       );
+
+      // Also record uploaded images in product_images for media response
+      for (let file of imageFiles) {
+        const { url: imgUrl, key: imgKey, provider: mediaProvider } = deriveMediaParams(file);
+        await client.query(
+          `
+          INSERT INTO product_images
+          (product_id, image_url, image_key, media_type, media_provider)
+          VALUES ($1, $2, $3, $4, $5)
+          `,
+          [productId, imgUrl, imgKey, "image", mediaProvider || null]
+        );
+      }
     }
 
     // Save new gallery images
