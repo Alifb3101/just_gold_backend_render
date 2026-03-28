@@ -295,32 +295,37 @@ const validateColorPanel = (rawType, rawValue, { requireValue, uploadedUrl }) =>
     hasUpload: !!uploadedUrl,
   });
 
-  const hasType = rawType !== undefined && rawType !== null;
-  const hasValue = rawValue !== undefined && rawValue !== null;
   const hasUploadedUrl = !!uploadedUrl;
+  const hasValue = rawValue !== undefined && rawValue !== null;
+  const normalizedType = rawType
+    ? rawType.toString().trim().toLowerCase()
+    : hasUploadedUrl
+    ? "image"
+    : null;
+  const hasType = normalizedType !== null;
 
-  if (requireValue && hasUploadedUrl && !hasType) {
-    return {
-      error: "color_panel_type is required when uploading color panel image",
-    };
-  }
+  const needsValue = requireValue || hasUploadedUrl || hasValue || hasType;
 
-  if (!requireValue && !hasType && !hasValue && !hasUploadedUrl) {
+  // Nothing provided and not required → no update
+  if (!needsValue) {
     return { shouldUpdate: false, colorPanelType: null, colorPanelValue: null };
   }
 
-  if (!requireValue && (hasValue || hasUploadedUrl) && !hasType) {
+  if (!hasType) {
     return {
-      error: "color_panel_type is required when updating color_panel_value",
+      error: "color_panel_type is required when updating color panel",
+      debug: { rawType, rawValue, uploadedUrl, requireValue }
     };
   }
 
-  if (!requireValue && hasType && !(hasValue || hasUploadedUrl)) {
-    // Type without a value/upload and not required → no update
-    return { shouldUpdate: false, colorPanelType: null, colorPanelValue: null };
+  if (hasUploadedUrl && normalizedType !== "image") {
+    return {
+      error: "color_panel_type must be image when uploading color panel image",
+      debug: { rawType, rawValue, uploadedUrl }
+    };
   }
 
-  const colorPanelType = (rawType || "hex").toString().trim().toLowerCase();
+  const colorPanelType = normalizedType || "hex";
   const colorPanelValue = (rawValue || "").toString().trim();
   const finalValue = uploadedUrl || colorPanelValue;
 
@@ -339,9 +344,6 @@ const validateColorPanel = (rawType, rawValue, { requireValue, uploadedUrl }) =>
   }
 
   if (!finalValue) {
-    if (!requireValue) {
-      return { shouldUpdate: false, colorPanelType: null, colorPanelValue: null };
-    }
     return {
       error: "color_panel_value is required for color panel configuration",
       debug: { rawType, rawValue, uploadedUrl, requireValue }
