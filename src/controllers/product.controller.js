@@ -316,9 +316,8 @@ const validateColorPanel = (rawType, rawValue, { requireValue, uploadedUrl }) =>
   }
 
   if (!requireValue && hasType && !(hasValue || hasUploadedUrl)) {
-    return {
-      error: "color_panel_value is required when updating color_panel_type",
-    };
+    // Type without a value/upload and not required → no update
+    return { shouldUpdate: false, colorPanelType: null, colorPanelValue: null };
   }
 
   const colorPanelType = (rawType || "hex").toString().trim().toLowerCase();
@@ -340,6 +339,9 @@ const validateColorPanel = (rawType, rawValue, { requireValue, uploadedUrl }) =>
   }
 
   if (!finalValue) {
+    if (!requireValue) {
+      return { shouldUpdate: false, colorPanelType: null, colorPanelValue: null };
+    }
     return {
       error: "color_panel_value is required for color panel configuration",
       debug: { rawType, rawValue, uploadedUrl, requireValue }
@@ -876,10 +878,10 @@ exports.createProduct = async (req, res, next) => {
 
       const wantsColorPanel =
         colorPanelFile ||
-        variant.color_panel_type ||
-        variant.colorPanelType ||
         variant.color_panel_value ||
-        variant.colorPanelValue;
+        variant.colorPanelValue ||
+        variant.color_panel_type ||
+        variant.colorPanelType;
 
       const colorPanelValidation = validateColorPanel(
         variant.color_panel_type || variant.colorPanelType,
@@ -1318,10 +1320,10 @@ exports.updateProduct = async (req, res, next) => {
 
       const wantsColorPanel =
         colorPanelFile ||
-        variant.color_panel_type ||
-        variant.colorPanelType ||
         variant.color_panel_value ||
-        variant.colorPanelValue;
+        variant.colorPanelValue ||
+        variant.color_panel_type ||
+        variant.colorPanelType;
 
       const colorPanelValidation = validateColorPanel(
         variant.color_panel_type || variant.colorPanelType,
