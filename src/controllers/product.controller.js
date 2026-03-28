@@ -287,6 +287,14 @@ const deleteFromS3 = async (keys = []) => {
 };
 
 const validateColorPanel = (rawType, rawValue, { requireValue, uploadedUrl }) => {
+  // Debug visibility for incoming values
+  console.log('[COLOR PANEL VALIDATE]', {
+    rawType,
+    rawValue,
+    requireValue,
+    hasUpload: !!uploadedUrl,
+  });
+
   const hasType = rawType !== undefined && rawType !== null;
   const hasValue = rawValue !== undefined && rawValue !== null;
   const hasUploadedUrl = !!uploadedUrl;
@@ -320,18 +328,21 @@ const validateColorPanel = (rawType, rawValue, { requireValue, uploadedUrl }) =>
   if (hasUploadedUrl && colorPanelType !== "image") {
     return {
       error: "color_panel_type must be image when uploading color panel image",
+      debug: { rawType, rawValue, uploadedUrl }
     };
   }
 
   if (!COLOR_PANEL_TYPES.includes(colorPanelType)) {
     return {
       error: "color_panel_type must be one of: hex, gradient, image",
+      debug: { colorPanelType, rawType }
     };
   }
 
   if (!finalValue) {
     return {
       error: "color_panel_value is required for color panel configuration",
+      debug: { rawType, rawValue, uploadedUrl, requireValue }
     };
   }
 
@@ -881,6 +892,7 @@ exports.createProduct = async (req, res, next) => {
         return res.status(400).json({
           message: colorPanelValidation.error,
           variant_index: i,
+          debug: colorPanelValidation.debug || null,
         });
       }
 
@@ -1322,6 +1334,8 @@ exports.updateProduct = async (req, res, next) => {
         return res.status(400).json({
           message: colorPanelValidation.error,
           variant_index: i,
+          debug: colorPanelValidation.debug || null,
+          debug: colorPanelValidation.debug || null,
         });
       }
 
