@@ -61,26 +61,20 @@ const getMediaUrl = (keyOrObject, size = 'product', provider = 'cloudinary') => 
   // MODERN: ImageKit provider
   if (provider === 'imagekit') {
     const baseUrl = providers.imagekit;
-    
-    // Build ImageKit transformation parameters based on size
-    let transformation = '';
-    
+
+    // Use ImageKit transformations with automatic format/quality; default to product size
+    let transformation = 'w-800,f-auto,q-auto';
+
     if (size === 'thumbnail') {
-      transformation = 'w-300,q-80';
-    } else if (size === 'product') {
-      transformation = 'w-800,q-80';
+      transformation = 'w-300,f-auto,q-auto';
     } else if (size === 'zoom') {
-      transformation = 'w-1400,q-90';
+      transformation = 'w-1400,f-auto,q-auto';
     } else if (size === 'card') {
-      transformation = 'w-500,q-80';
+      transformation = 'w-500,f-auto,q-auto';
     } else if (size === 'preview') {
-      transformation = 'w-200,q-75';
+      transformation = 'w-200,f-auto,q-75';
     }
 
-    // Return URL with or without transformation
-    if (!transformation) {
-      return `${baseUrl}/${key}`;
-    }
     return `${baseUrl}/${key}?tr=${transformation}`;
   }
 

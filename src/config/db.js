@@ -5,23 +5,17 @@ const buildPoolConfig = () => {
   // For fallback config, require SSL in production
   const sslRequired = process.env.DB_SSL === "true" || process.env.NODE_ENV === "production" || !!process.env.DATABASE_URL;
 
-  const max = Number.parseInt(process.env.DB_POOL_MAX || process.env.PGPOOLMAX || "12", 10) || 12;
-  const min = Number.parseInt(process.env.DB_POOL_MIN || process.env.PGPOOLMIN || "1", 10) || 1;
-  const idleTimeoutMillis = Number.parseInt(process.env.DB_POOL_IDLE || "15000", 10) || 15000;
-  const connectionTimeoutMillis = Number.parseInt(process.env.DB_POOL_TIMEOUT || "10000", 10) || 10000;
-  const maxUses = Number.parseInt(process.env.DB_POOL_MAX_USES || "5000", 10) || 5000;
-
   if (process.env.DATABASE_URL) {
     return {
       connectionString: process.env.DATABASE_URL,
       // Supabase may have self-signed certs, so reject unauthorized certs = false
       ssl: sslRequired ? { rejectUnauthorized: false } : false,
       // Connection pooling parameters for stability
-      max,
-      min,
-      idleTimeoutMillis, // Close idle connections after configured idle ms
-      connectionTimeoutMillis, // Wait max X ms for a connection
-      maxUses, // Recycle connections after N uses to avoid bloat
+      max: 20,
+      min: 2,
+      idleTimeoutMillis: 15000, // Close idle connections after 15s
+      connectionTimeoutMillis: 10000, // Wait max 10s for a connection
+      maxUses: 7500, // Recycle connections after 7500 uses
       statement_timeout: 30000, // Kill queries after 30s
     };
   }
@@ -45,11 +39,10 @@ const buildPoolConfig = () => {
     database,
     password,
     ssl: sslRequired ? { rejectUnauthorized: false } : false,
-    max,
-    min,
-    idleTimeoutMillis,
-    connectionTimeoutMillis,
-    maxUses,
+    max: 20,
+    min: 2,
+    idleTimeoutMillis: 15000,
+    connectionTimeoutMillis: 10000,
   };
 };
 
@@ -59,17 +52,6 @@ const pool = new Pool(buildPoolConfig());
 pool.on('error', (err) => {
   console.error('❌ Unexpected error on idle client in pool:', err);
 });
-
-// Light-touch telemetry to spot pool exhaustion before it breaks things
-const logPoolUsage = () => {
-  const total = pool.totalCount;
-  const idle = pool.idleCount;
-  const waiting = pool.waitingCount;
-  if (waiting > 0 || total >= (Number(process.env.DB_POOL_MAX || process.env.PGPOOLMAX || 12) * 0.8)) {
-    console.warn('[DB POOL] usage', { total, idle, waiting });
-  }
-};
-setInterval(logPoolUsage, 60000).unref();
 
 pool.on('connect', () => {
   console.log('[DB POOL] New connection established');

@@ -3,6 +3,7 @@ const { deleteMultipleFromCloudinary } = require("../config/cloudinary");
 const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const s3 = require("../config/s3");
 const { getMediaUrl, resolveMediaUrl } = require("../services/media.service");
+const { buildImageKitVariants } = require("../utils/imagekitVariants");
 const {
   buildProductsQuery,
   buildCacheKey,
@@ -329,6 +330,19 @@ const validateColorPanel = (rawType, rawValue, { requireValue, uploadedUrl }) =>
   const colorPanelValue = (rawValue || "").toString().trim();
   const finalValue = uploadedUrl || colorPanelValue;
 
+  const isPendingUpload =
+    typeof finalValue === "string" && finalValue.startsWith("__PENDING_UPLOAD__");
+
+  if (colorPanelType === "image" && isPendingUpload) {
+    // Frontend may send a placeholder while upload is pending; skip validation/store nothing
+    return {
+      shouldUpdate: false,
+      colorPanelType: null,
+      colorPanelValue: null,
+      debug: { pendingUpload: true },
+    };
+  }
+
   if (hasUploadedUrl && colorPanelType !== "image") {
     return {
       error: "color_panel_type must be image when uploading color panel image",
@@ -564,6 +578,7 @@ exports.getProductDetail = async (req, res, next) => {
     const resolvedMedia = mediaResult.rows.map((media) => ({
       ...media,
       image_url: resolveMediaUrl(media.image_url, media.image_key, media.media_provider, 'product'),
+      image_variants: buildImageKitVariants(media.image_key),
     }));
 
     const primaryVariant = visibleVariants[0] || null;
@@ -581,10 +596,12 @@ exports.getProductDetail = async (req, res, next) => {
     const baseAfterimage = resolveMediaUrl(product.afterimage, product.afterimage_key, product.media_provider, 'product');
 
     const finalThumbnail = primaryVariantResolved?.main_image || baseThumbnail;
+    // Afterimage fallback priority: secondary image → gallery image → stored afterimage → thumbnail
     const finalAfterimage =
       primaryVariantResolved?.secondary_image ||
       firstMediaImage?.image_url ||
-      baseAfterimage;
+      baseAfterimage ||
+      finalThumbnail;
 
     const productPayload = {
       ...product,
@@ -594,7 +611,9 @@ exports.getProductDetail = async (req, res, next) => {
       variants: visibleVariants.map((variant) => ({
         ...variant,
         main_image: resolveMediaUrl(variant.main_image, variant.main_image_key, variant.media_provider, 'product'),
+        main_image_variants: buildImageKitVariants(variant.main_image_key),
         secondary_image: resolveMediaUrl(variant.secondary_image, variant.secondary_image_key, variant.media_provider, 'product'),
+        secondary_image_variants: buildImageKitVariants(variant.secondary_image_key),
       })),
       media: resolvedMedia,
     };
@@ -1080,6 +1099,20 @@ exports.updateProduct = async (req, res, next) => {
     } = req.body;
 
     const categoryId = pickCategoryId(req.body);
+    const firstValue = (value) => (Array.isArray(value) ? value[0] : value);
+    const parseNullableNumber = (value) => {
+      const raw = firstValue(value);
+      if (raw === undefined || raw === null || raw === "") return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    };
+    const parseNullableInt = (value) => {
+      const raw = firstValue(value);
+      if (raw === undefined || raw === null || raw === "") return null;
+      const n = parseInt(String(raw), 10);
+      return Number.isFinite(n) ? n : null;
+    };
+
 
     const tagsValidation = normalizeTagsInput(rawTags, legacyTag, { required: false });
     if (tagsValidation.error) {
@@ -1093,10 +1126,17 @@ exports.updateProduct = async (req, res, next) => {
       mediaProvider || media_provider || provider || storageProvider || storage_provider
     );
 
-    const slug = name
-      ? name
+    const normalizedName = Array.isArray(name)
+      ? name[0]
+      : name;
+
+    const safeName = typeof normalizedName === "string"
+      ? normalizedName.trim()
+      : null;
+
+    const slug = safeName
+      ? safeName
           .toLowerCase()
-          .trim()
           .replace(/\s+/g, "-")
           .replace(/[^\w-]+/g, "")
       : existingProduct.rows[0].slug;
@@ -1122,11 +1162,11 @@ exports.updateProduct = async (req, res, next) => {
       WHERE id = $16
       `,
       [
-        name || null,
-        name ? slug : null,
+        safeName || null,
+        safeName ? slug : null,
         description || null,
-        base_price || null,
-        base_stock !== undefined ? parseInt(base_stock, 10) : null,
+        parseNullableNumber(base_price),
+        parseNullableInt(base_stock),
         categoryId,
         product_model_no || null,
         how_to_apply || null,
