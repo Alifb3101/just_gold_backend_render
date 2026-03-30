@@ -578,7 +578,7 @@ exports.getProductDetail = async (req, res, next) => {
     const resolvedMedia = mediaResult.rows.map((media) => ({
       ...media,
       image_url: resolveMediaUrl(media.image_url, media.image_key, media.media_provider, 'product'),
-      image_variants: buildImageKitVariants(media.image_key, media.media_provider, media.image_url),
+      image_variants: buildImageKitVariants(media.image_key),
     }));
 
     const primaryVariant = visibleVariants[0] || null;
@@ -611,9 +611,9 @@ exports.getProductDetail = async (req, res, next) => {
       variants: visibleVariants.map((variant) => ({
         ...variant,
         main_image: resolveMediaUrl(variant.main_image, variant.main_image_key, variant.media_provider, 'product'),
-        main_image_variants: buildImageKitVariants(variant.main_image_key, variant.media_provider, variant.main_image),
+        main_image_variants: buildImageKitVariants(variant.main_image_key),
         secondary_image: resolveMediaUrl(variant.secondary_image, variant.secondary_image_key, variant.media_provider, 'product'),
-        secondary_image_variants: buildImageKitVariants(variant.secondary_image_key, variant.media_provider, variant.secondary_image),
+        secondary_image_variants: buildImageKitVariants(variant.secondary_image_key),
       })),
       media: resolvedMedia,
     };
