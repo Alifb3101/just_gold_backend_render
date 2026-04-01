@@ -2,6 +2,8 @@ const router = require("express").Router();
 const multer = require("multer");
 const controller = require("../controllers/product.controller");
 const pool = require("../config/db");
+const auth = require("../middlewares/auth.middleware");
+const role = require("../middlewares/role.middleware");
 
 /* =========================================================
    CLOUDINARY UPLOAD CONFIGURATION
@@ -455,5 +457,9 @@ router.get("/product", controller.getProducts);
 
 // Product collection (list all)
 router.get("/products", controller.getProducts);
+
+// Admin-only helpers: read all linked product image URLs, then set thumbnail/afterimage
+router.get("/admin/products/:id/image-urls", auth, role("admin"), controller.getProductImageUrlsForAdmin);
+router.post("/admin/products/:id/thumbnail-afterimage", auth, role("admin"), controller.setProductThumbnailAfterimageForAdmin);
 
 module.exports = router;

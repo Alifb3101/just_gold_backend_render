@@ -1655,3 +1655,132 @@ exports.deleteProduct = async (req, res, next) => {
     client.release();
   }
 };
+
+/* =========================================================
+   ADMIN: THUMBNAIL/AFTERIMAGE URL HELPER APIS
+========================================================= */
+exports.getProductImageUrlsForAdmin = async (req, res, next) => {
+  try {
+    const productId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ message: "Invalid product id" });
+    }
+
+    const productResult = await pool.query(
+      `SELECT id, thumbnail, afterimage FROM products WHERE id = $1 LIMIT 1`,
+      [productId]
+    );
+
+    if (!productResult.rows.length) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    const mediaResult = await pool.query(
+      `SELECT id, image_url, media_type FROM product_images WHERE product_id = $1 ORDER BY id ASC`,
+      [productId]
+    );
+
+    const variantsResult = await pool.query(
+      `
+      SELECT id, shade, main_image, secondary_image, color_panel_type, color_panel_value
+      FROM product_variants
+      WHERE product_id = $1
+      ORDER BY id ASC
+      `,
+      [productId]
+    );
+
+    const product = productResult.rows[0];
+    const seen = new Set();
+    const urls = [];
+
+    const add = (url, source, extra = {}) => {
+      if (!url || typeof url !== "string") return;
+      const normalized = url.trim();
+      if (!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      urls.push({ url: normalized, source, ...extra });
+    };
+
+    add(product.thumbnail, "products.thumbnail");
+    add(product.afterimage, "products.afterimage");
+
+    for (const media of mediaResult.rows) {
+      add(media.image_url, "product_images.image_url", {
+        media_id: media.id,
+        media_type: media.media_type,
+      });
+    }
+
+    for (const variant of variantsResult.rows) {
+      add(variant.main_image, "product_variants.main_image", {
+        variant_id: variant.id,
+        shade: variant.shade,
+      });
+      add(variant.secondary_image, "product_variants.secondary_image", {
+        variant_id: variant.id,
+        shade: variant.shade,
+      });
+      if ((variant.color_panel_type || "").toLowerCase() === "image") {
+        add(variant.color_panel_value, "product_variants.color_panel_value", {
+          variant_id: variant.id,
+          shade: variant.shade,
+        });
+      }
+    }
+
+    return res.json({
+      product_id: productId,
+      current: {
+        thumbnail: product.thumbnail,
+        afterimage: product.afterimage,
+      },
+      total_urls: urls.length,
+      urls,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.setProductThumbnailAfterimageForAdmin = async (req, res, next) => {
+  try {
+    const productId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ message: "Invalid product id" });
+    }
+
+    const normalize = (v) => (typeof v === "string" ? v.trim() : null);
+    const thumbnail = normalize(req.body?.thumbnail);
+    const afterimage = normalize(req.body?.afterimage);
+
+    if (!thumbnail && !afterimage) {
+      return res.status(400).json({
+        message: "At least one of thumbnail or afterimage is required",
+      });
+    }
+
+    const updated = await pool.query(
+      `
+      UPDATE products
+      SET
+        thumbnail = COALESCE($1, thumbnail),
+        afterimage = COALESCE($2, afterimage)
+      WHERE id = $3
+      RETURNING id, thumbnail, afterimage
+      `,
+      [thumbnail, afterimage, productId]
+    );
+
+    if (!updated.rows.length) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    return res.json({
+      message: "thumbnail/afterimage updated",
+      product: updated.rows[0],
+    });
+  } catch (err) {
+    next(err);
+  }
+};
