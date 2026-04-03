@@ -36,27 +36,35 @@ const fetchSearchSuggestions = async (query) => {
   if (!normalized) return [];
 
   const tsQuery = buildTsQuery(normalized);
-  if (!tsQuery) return [];
 
   const result = await pool.query({
     text: `
       WITH params AS (
-        SELECT $1::text AS q
+        SELECT $1::text AS tsq, $2::text AS raw_query, $3::text AS raw_like
       )
       SELECT
         p.name,
         p.slug,
         p.thumbnail,
         p.thumbnail_key,
-        ts_rank(p.search_vector, to_tsquery('simple', params.q)) AS rank,
-        similarity(p.name_unaccent, params.q) AS sim
+        p.product_model_no,
+        CASE
+          WHEN params.tsq IS NOT NULL AND p.search_vector @@ to_tsquery('simple', params.tsq)
+            THEN ts_rank(p.search_vector, to_tsquery('simple', params.tsq))
+          ELSE 0
+        END AS rank,
+        similarity(p.name_unaccent, params.raw_query) AS sim,
+        CASE WHEN p.product_model_no ILIKE params.raw_like THEN 1 ELSE 0 END AS model_match
       FROM params, products p
       WHERE p.is_active = true
-        AND p.search_vector @@ to_tsquery('simple', params.q)
-      ORDER BY rank DESC, sim DESC, length(p.name_unaccent) ASC, p.id ASC
+        AND (
+          (params.tsq IS NOT NULL AND p.search_vector @@ to_tsquery('simple', params.tsq))
+          OR p.product_model_no ILIKE params.raw_like
+        )
+      ORDER BY model_match DESC, rank DESC, sim DESC, length(p.name_unaccent) ASC, p.id ASC
       LIMIT 8
     `,
-    values: [tsQuery],
+    values: [tsQuery, normalized, `%${normalized}%`],
   });
 
   return result.rows.map((row) => ({

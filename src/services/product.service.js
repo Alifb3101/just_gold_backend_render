@@ -154,8 +154,14 @@ const buildProductsQuery = (rawFilters = {}) => {
 	if (tsQuery) {
 		values.push(tsQuery);
 		const searchIdx = values.length;
+		values.push(`%${searchTerm}%`);
+		const modelSearchIdx = values.length;
 		where.push(
-			`(p.search_vector @@ to_tsquery('simple', $${searchIdx}) OR similarity(p.name_unaccent, unaccent($${searchIdx})) > 0.25)`
+			`(
+				p.search_vector @@ to_tsquery('simple', $${searchIdx})
+				OR similarity(p.name_unaccent, unaccent($${searchIdx})) > 0.25
+				OR p.product_model_no ILIKE $${modelSearchIdx}
+			)`
 		);
 	}
 
