@@ -15,7 +15,6 @@
 
 const pool = require("../config/db");
 const { getRedisClient } = require("../config/redis");
-const { getMediaUrl } = require("./media.service");
 
 /* =========================================================
    CONFIGURATION
@@ -75,7 +74,7 @@ const mapProductFields = (row) => ({
   id: row.id,
   name: row.name,
   price: parseFloat(row.base_price),
-  main_image: getMediaUrl(row.thumbnail_key, "thumbnail"),
+  main_image: row.thumbnail,
   slug: row.slug,
 });
 
@@ -124,7 +123,7 @@ const getSimilarProducts = async (productId, categoryId) => {
         p.id,
         p.name,
         p.base_price,
-        p.thumbnail_key,
+        p.thumbnail,
         p.slug,
         p.category_id,
         p.created_at,
@@ -184,7 +183,7 @@ const getFrequentlyBoughtTogether = async (productId) => {
       p.id,
       p.name,
       p.base_price,
-      p.thumbnail_key,
+      p.thumbnail,
       p.slug,
       p.category_id,
       COALESCE(p.category_id::text, 'unknown') AS brand,
@@ -246,7 +245,7 @@ const getColdStartFallback = async (productId, productData, excludeIds, limit) =
       p.id,
       p.name,
       p.base_price,
-      p.thumbnail_key,
+      p.thumbnail,
       p.slug,
       p.category_id,
       COALESCE(p.category_id::text, 'unknown') AS brand,
@@ -288,7 +287,7 @@ const getTrendingProducts = async (excludeIds = []) => {
       p.id,
       p.name,
       p.base_price,
-      p.thumbnail_key,
+      p.thumbnail,
       p.slug,
       p.category_id,
       COALESCE(p.category_id::text, 'unknown') AS brand,
@@ -392,26 +391,35 @@ const invalidateSuggestionCache = async (productId = null) => {
 const updateSalesStats = async (productIds, quantities) => {
   if (!productIds?.length) return;
 
+  const aggregated = new Map();
+  for (let i = 0; i < productIds.length; i++) {
+    const productId = Number.parseInt(productIds[i], 10);
+    const quantity = Number.parseInt(quantities?.[i], 10) || 1;
+    if (!Number.isInteger(productId) || quantity <= 0) continue;
+    aggregated.set(productId, (aggregated.get(productId) || 0) + quantity);
+  }
+
+  if (!aggregated.size) return;
+
+  const ids = [...aggregated.keys()];
+  const qty = ids.map((id) => aggregated.get(id));
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    for (let i = 0; i < productIds.length; i++) {
-      const productId = productIds[i];
-      const quantity = quantities[i] || 1;
-
-      await client.query(
-        `
-          INSERT INTO product_sales_stats (product_id, total_sales, last_30_days_sales, updated_at)
-          VALUES ($1, $2, $2, NOW())
-          ON CONFLICT (product_id) DO UPDATE SET
-            total_sales = product_sales_stats.total_sales + $2,
-            last_30_days_sales = product_sales_stats.last_30_days_sales + $2,
-            updated_at = NOW()
-        `,
-        [productId, quantity]
-      );
-    }
+    await client.query(
+      `
+        INSERT INTO product_sales_stats (product_id, total_sales, last_30_days_sales, updated_at)
+        SELECT id, qty, qty, NOW()
+        FROM UNNEST($1::int[], $2::int[]) AS t(id, qty)
+        ON CONFLICT (product_id) DO UPDATE SET
+          total_sales = product_sales_stats.total_sales + EXCLUDED.total_sales,
+          last_30_days_sales = product_sales_stats.last_30_days_sales + EXCLUDED.last_30_days_sales,
+          updated_at = NOW()
+      `,
+      [ids, qty]
+    );
 
     await client.query("COMMIT");
   } catch (err) {

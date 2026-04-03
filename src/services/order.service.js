@@ -215,9 +215,7 @@ const normalizeSnapshotItems = async (client, snapshotItems, { lock = false } = 
     throw new ApiError(400, "Checkout snapshot is empty", "EMPTY_CHECKOUT_SNAPSHOT");
   }
 
-  const validatedItems = [];
-
-  for (const snapshotItem of snapshotItems) {
+  const parsedItems = snapshotItems.map((snapshotItem) => {
     const productId = Number.parseInt(snapshotItem.productId, 10);
     const variantId = snapshotItem.variantId ? Number.parseInt(snapshotItem.variantId, 10) : null;
     const quantity = Number.parseInt(snapshotItem.quantity, 10);
@@ -226,63 +224,84 @@ const normalizeSnapshotItems = async (client, snapshotItems, { lock = false } = 
       throw new ApiError(400, "Invalid checkout snapshot item", "INVALID_CHECKOUT_SNAPSHOT_ITEM");
     }
 
-    const lockClause = lock ? "FOR UPDATE" : "";
-    const productResult = await client.query(
+    return { productId, variantId, quantity };
+  });
+
+  const productIds = [...new Set(parsedItems.map((item) => item.productId))];
+  const variantIds = [...new Set(parsedItems.map((item) => item.variantId).filter((id) => Number.isInteger(id)))];
+  const lockClause = lock ? "FOR UPDATE" : "";
+
+  const productResult = await client.query(
+    `
+      SELECT id, name, description, base_price, base_stock, is_active
+      FROM products
+      WHERE id = ANY($1::int[])
+      ${lockClause}
+    `,
+    [productIds]
+  );
+
+  const productMap = new Map(productResult.rows.map((row) => [Number(row.id), row]));
+
+  let variantMap = new Map();
+  if (variantIds.length) {
+    const variantResult = await client.query(
       `
-        SELECT id, name, description, base_price, base_stock, is_active
-        FROM products
-        WHERE id = $1
+        SELECT id, product_id, stock, price, discount_price
+        FROM product_variants
+        WHERE id = ANY($1::int[])
         ${lockClause}
       `,
-      [productId]
+      [variantIds]
     );
+    variantMap = new Map(variantResult.rows.map((row) => [Number(row.id), row]));
+  }
 
-    if (!productResult.rows.length || !productResult.rows[0].is_active) {
-      throw new ApiError(400, `Product ${productId} is unavailable`, "PRODUCT_UNAVAILABLE");
+  const stockRequirements = new Map();
+  for (const item of parsedItems) {
+    const key = item.variantId ? `variant:${item.variantId}` : `product:${item.productId}`;
+    stockRequirements.set(key, (stockRequirements.get(key) || 0) + item.quantity);
+  }
+
+  for (const item of parsedItems) {
+    const product = productMap.get(item.productId);
+    if (!product || !product.is_active) {
+      throw new ApiError(400, `Product ${item.productId} is unavailable`, "PRODUCT_UNAVAILABLE");
     }
 
-    const product = productResult.rows[0];
-    let unitPrice = Number(product.base_price);
-    let effectiveVariantId = null;
-    let stock = Number(product.base_stock || 0);
-
-    if (variantId) {
-      const variantResult = await client.query(
-        `
-          SELECT id, product_id, stock, price, discount_price
-          FROM product_variants
-          WHERE id = $1 AND product_id = $2
-          ${lockClause}
-        `,
-        [variantId, productId]
-      );
-
-      if (!variantResult.rows.length) {
-        throw new ApiError(400, `Variant ${variantId} is unavailable`, "VARIANT_UNAVAILABLE");
+    if (item.variantId) {
+      const variant = variantMap.get(item.variantId);
+      if (!variant || Number(variant.product_id) !== item.productId) {
+        throw new ApiError(400, `Variant ${item.variantId} is unavailable`, "VARIANT_UNAVAILABLE");
       }
-
-      const variant = variantResult.rows[0];
-      unitPrice = Number(variant.discount_price ?? variant.price ?? product.base_price);
-      effectiveVariantId = Number(variant.id);
-      stock = Number(variant.stock || 0);
+      const required = stockRequirements.get(`variant:${item.variantId}`) || 0;
+      if (required > Number(variant.stock || 0)) {
+        throw new ApiError(409, `Insufficient stock for ${product.name}`, "INSUFFICIENT_STOCK");
+      }
+      continue;
     }
 
-    if (quantity > stock) {
+    const required = stockRequirements.get(`product:${item.productId}`) || 0;
+    if (required > Number(product.base_stock || 0)) {
       throw new ApiError(409, `Insufficient stock for ${product.name}`, "INSUFFICIENT_STOCK");
     }
+  }
 
-    validatedItems.push({
+  return parsedItems.map((item) => {
+    const product = productMap.get(item.productId);
+    const variant = item.variantId ? variantMap.get(item.variantId) : null;
+    const unitPrice = Number(variant ? (variant.discount_price ?? variant.price ?? product.base_price) : product.base_price);
+
+    return {
       productId: Number(product.id),
-      variantId: effectiveVariantId,
+      variantId: variant ? Number(variant.id) : null,
       productName: product.name,
       description: product.description,
       unitPrice: round2(unitPrice),
-      quantity,
-      totalPrice: round2(unitPrice * quantity),
-    });
-  }
-
-  return validatedItems;
+      quantity: item.quantity,
+      totalPrice: round2(unitPrice * item.quantity),
+    };
+  });
 };
 
 const computeTotals = async (client, items, couponCode, identity) => {
@@ -471,6 +490,75 @@ const generateOrderNumber = async (client) => {
   return result.rows[0].order_number;
 };
 
+const buildStockNeeds = (items = []) => {
+  const variantNeeds = new Map();
+  const productNeeds = new Map();
+
+  for (const item of items) {
+    const quantity = Number(item.quantity || 0);
+    if (!quantity) continue;
+
+    if (item.variantId) {
+      const current = variantNeeds.get(item.variantId) || { qty: 0, name: item.productName };
+      current.qty += quantity;
+      variantNeeds.set(item.variantId, current);
+    } else {
+      const current = productNeeds.get(item.productId) || { qty: 0, name: item.productName };
+      current.qty += quantity;
+      productNeeds.set(item.productId, current);
+    }
+  }
+
+  return { variantNeeds, productNeeds };
+};
+
+const insertOrderItemsBatch = async (client, orderId, items) => {
+  const productIds = items.map((item) => Number(item.productId));
+  const variantIds = items.map((item) => (item.variantId ? Number(item.variantId) : null));
+  const names = items.map((item) => item.productName);
+  const unitPrices = items.map((item) => Number(item.unitPrice));
+  const quantities = items.map((item) => Number(item.quantity));
+  const totalPrices = items.map((item) => Number(item.totalPrice));
+  const vatPercentages = items.map(() => Number(TAX_PERCENT));
+
+  await client.query(
+    `
+      INSERT INTO order_items (
+        order_id, product_id, variant_id, product_name_snapshot,
+        price_snapshot, quantity, total_price, vat_percentage, weight
+      )
+      SELECT
+        $1,
+        t.product_id,
+        t.variant_id,
+        t.product_name_snapshot,
+        t.price_snapshot,
+        t.quantity,
+        t.total_price,
+        t.vat_percentage,
+        NULL::numeric
+      FROM UNNEST(
+        $2::int[],
+        $3::int[],
+        $4::text[],
+        $5::numeric[],
+        $6::int[],
+        $7::numeric[],
+        $8::numeric[]
+      ) AS t(
+        product_id,
+        variant_id,
+        product_name_snapshot,
+        price_snapshot,
+        quantity,
+        total_price,
+        vat_percentage
+      )
+    `,
+    [orderId, productIds, variantIds, names, unitPrices, quantities, totalPrices, vatPercentages]
+  );
+};
+
 const createOrderWithItems = async ({
   client,
   identity,
@@ -537,66 +625,10 @@ const createOrderWithItems = async ({
 
   const order = orderResult.rows[0];
 
-  for (const item of items) {
-    await client.query(
-      `
-        INSERT INTO order_items (
-          order_id, product_id, variant_id, product_name_snapshot,
-          price_snapshot, quantity, total_price, vat_percentage, weight
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      `,
-      [
-        order.id,
-        item.productId,
-        item.variantId,
-        item.productName,
-        item.unitPrice,
-        item.quantity,
-        item.totalPrice,
-        TAX_PERCENT,
-        null,
-      ]
-    );
+  await insertOrderItemsBatch(client, order.id, items);
 
-    if (!deductStock) {
-      continue;
-    }
-
-    if (item.variantId) {
-      const stockUpdateResult = await client.query(
-        `
-          UPDATE product_variants
-          SET stock = stock - $1
-          WHERE id = $2 AND stock >= $1
-        `,
-        [item.quantity, item.variantId]
-      );
-      if (stockUpdateResult.rowCount !== 1) {
-        throw new ApiError(409, `Insufficient stock for ${item.productName}`, "INSUFFICIENT_STOCK");
-      }
-      console.log("[checkout] stock deducted", {
-        scope: "variant",
-        variantId: item.variantId,
-        quantity: item.quantity,
-      });
-    } else {
-      const stockUpdateResult = await client.query(
-        `
-          UPDATE products
-          SET base_stock = base_stock - $1
-          WHERE id = $2 AND base_stock >= $1
-        `,
-        [item.quantity, item.productId]
-      );
-      if (stockUpdateResult.rowCount !== 1) {
-        throw new ApiError(409, `Insufficient stock for ${item.productName}`, "INSUFFICIENT_STOCK");
-      }
-      console.log("[checkout] stock deducted", {
-        scope: "product",
-        productId: item.productId,
-        quantity: item.quantity,
-      });
-    }
+  if (deductStock) {
+    await deductStockForItems(client, items);
   }
 
   if (coupon && coupon.id) {
@@ -625,33 +657,80 @@ const createOrderWithItems = async ({
 };
 
 const deductStockForItems = async (client, items) => {
-  for (const item of items) {
-    const quantity = Number(item.quantity);
-    if (item.variantId) {
-      const stockUpdateResult = await client.query(
-        `
-          UPDATE product_variants
-          SET stock = stock - $1
-          WHERE id = $2 AND stock >= $1
-        `,
-        [quantity, item.variantId]
-      );
-      if (stockUpdateResult.rowCount !== 1) {
-        throw new ApiError(409, `Insufficient stock for ${item.productName}`, "INSUFFICIENT_STOCK");
-      }
-    } else {
-      const stockUpdateResult = await client.query(
-        `
-          UPDATE products
-          SET base_stock = base_stock - $1
-          WHERE id = $2 AND base_stock >= $1
-        `,
-        [quantity, item.productId]
-      );
-      if (stockUpdateResult.rowCount !== 1) {
-        throw new ApiError(409, `Insufficient stock for ${item.productName}`, "INSUFFICIENT_STOCK");
-      }
+  const { variantNeeds, productNeeds } = buildStockNeeds(items);
+
+  const variantIds = [...variantNeeds.keys()];
+  if (variantIds.length) {
+    const variantQty = variantIds.map((id) => Number(variantNeeds.get(id).qty));
+
+    const variantInsufficient = await client.query(
+      `
+        WITH requested AS (
+          SELECT * FROM UNNEST($1::int[], $2::int[]) AS t(id, qty)
+        )
+        SELECT pv.id, pv.stock, r.qty
+        FROM product_variants pv
+        JOIN requested r ON r.id = pv.id
+        WHERE pv.stock < r.qty
+      `,
+      [variantIds, variantQty]
+    );
+
+    if (variantInsufficient.rows.length) {
+      const failedId = Number(variantInsufficient.rows[0].id);
+      const failedName = variantNeeds.get(failedId)?.name || `variant ${failedId}`;
+      throw new ApiError(409, `Insufficient stock for ${failedName}`, "INSUFFICIENT_STOCK");
     }
+
+    await client.query(
+      `
+        WITH requested AS (
+          SELECT * FROM UNNEST($1::int[], $2::int[]) AS t(id, qty)
+        )
+        UPDATE product_variants pv
+        SET stock = pv.stock - r.qty
+        FROM requested r
+        WHERE pv.id = r.id
+      `,
+      [variantIds, variantQty]
+    );
+  }
+
+  const productIds = [...productNeeds.keys()];
+  if (productIds.length) {
+    const productQty = productIds.map((id) => Number(productNeeds.get(id).qty));
+
+    const productInsufficient = await client.query(
+      `
+        WITH requested AS (
+          SELECT * FROM UNNEST($1::int[], $2::int[]) AS t(id, qty)
+        )
+        SELECT p.id, p.base_stock, r.qty
+        FROM products p
+        JOIN requested r ON r.id = p.id
+        WHERE p.base_stock < r.qty
+      `,
+      [productIds, productQty]
+    );
+
+    if (productInsufficient.rows.length) {
+      const failedId = Number(productInsufficient.rows[0].id);
+      const failedName = productNeeds.get(failedId)?.name || `product ${failedId}`;
+      throw new ApiError(409, `Insufficient stock for ${failedName}`, "INSUFFICIENT_STOCK");
+    }
+
+    await client.query(
+      `
+        WITH requested AS (
+          SELECT * FROM UNNEST($1::int[], $2::int[]) AS t(id, qty)
+        )
+        UPDATE products p
+        SET base_stock = p.base_stock - r.qty
+        FROM requested r
+        WHERE p.id = r.id
+      `,
+      [productIds, productQty]
+    );
   }
 };
 
@@ -979,7 +1058,6 @@ const getOrderSummary = async ({ identity, orderId }) => {
           payment_method,
           payment_status,
           order_status,
-          financial_status,
           subtotal,
           tax,
           shipping_fee,
@@ -1061,7 +1139,6 @@ const getOrderSummary = async ({ identity, orderId }) => {
       payment_method: order.payment_method,
       payment_status: order.payment_status,
       order_status: order.order_status,
-      financial_status: order.financial_status,
       totals: {
         subtotal: Number(order.subtotal),
         tax: Number(order.tax),

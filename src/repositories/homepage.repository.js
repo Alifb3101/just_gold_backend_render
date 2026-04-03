@@ -10,7 +10,6 @@ const fetchHomepageProducts = async ({ sectionNames, limit }) => {
           p.name,
           p.description,
           p.thumbnail,
-          p.thumbnail_key,
           COALESCE(v.price, p.base_price) AS price,
           v.discount_price,
           ROW_NUMBER() OVER (
@@ -37,7 +36,6 @@ const fetchHomepageProducts = async ({ sectionNames, limit }) => {
         name,
         description,
         thumbnail,
-        thumbnail_key,
         price,
         discount_price
       FROM ranked_products

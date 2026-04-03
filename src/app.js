@@ -7,6 +7,9 @@ const cookieParser = require("cookie-parser");
 
 const app = express();
 
+// Respect original client IP when running behind proxies/load balancers.
+app.set("trust proxy", 1);
+
 /* ---------------- CORS with X-Guest-Token Support ---------------- */
 
 const corsOptions = {
@@ -45,11 +48,17 @@ app.use(express.urlencoded({ extended: true }));
 
 // NOTE: All media now stored in Cloudinary - no local uploads folder needed
 
-// Rate limiting
+// Rate limiting (configurable via env)
+const parsedWindowMs = Number.parseInt(process.env.RATE_LIMIT_WINDOW_MS || "900000", 10);
+const parsedMax = Number.parseInt(process.env.RATE_LIMIT_MAX || "1000", 10);
+
 app.use(
   rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 300,
+    windowMs: Number.isInteger(parsedWindowMs) && parsedWindowMs > 0 ? parsedWindowMs : 15 * 60 * 1000,
+    max: Number.isInteger(parsedMax) && parsedMax > 0 ? parsedMax : 1000,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => req.method === "OPTIONS",
   })
 );
 

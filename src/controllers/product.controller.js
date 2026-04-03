@@ -487,6 +487,28 @@ exports.getProductDetail = async (req, res, next) => {
     }
 
     const requestedSlug = req.params.slug;
+    const cacheKey = `product:detail:${productId}`;
+    const redis = await getRedisClient();
+
+    if (redis) {
+      const cached = await redis.get(cacheKey);
+      if (cached) {
+        const productPayload = JSON.parse(cached);
+        const normalizedRequestedSlug = (requestedSlug || "").trim().toLowerCase();
+        const normalizedProductSlug = (productPayload.slug || "").trim().toLowerCase();
+        const canonicalUrl = `/api/v1/product/${productPayload.id}-${productPayload.slug}`;
+        const requestedPath = `${req.baseUrl}${req.path}`;
+
+        if (requestedSlug && normalizedRequestedSlug !== normalizedProductSlug) {
+          if (requestedPath === canonicalUrl) {
+            return res.json(productPayload);
+          }
+          return res.redirect(301, canonicalUrl);
+        }
+
+        return res.json(productPayload);
+      }
+    }
 
     const productResult = await pool.query(
       `
@@ -624,6 +646,10 @@ exports.getProductDetail = async (req, res, next) => {
         return res.json(productPayload);
       }
       return res.redirect(301, canonicalUrl);
+    }
+
+    if (redis) {
+      await redis.set(cacheKey, JSON.stringify(productPayload), { EX: 60 });
     }
 
     res.json(productPayload);

@@ -83,7 +83,6 @@ exports.getMyOrders = async (req, res, next) => {
           o.payment_method,
           o.payment_status,
           o.order_status,
-          o.financial_status,
           o.subtotal,
           o.tax,
           o.shipping_fee,
@@ -115,7 +114,6 @@ exports.getMyOrders = async (req, res, next) => {
           o.payment_method,
           o.payment_status,
           o.order_status,
-          o.financial_status,
           o.subtotal,
           o.tax,
           o.shipping_fee,
@@ -274,7 +272,7 @@ exports.getMyOrders = async (req, res, next) => {
         permissions: {
           can_cancel: ["pending", "confirmed"].includes(row.order_status),
           can_return: canReturn,
-          can_refund: row.financial_status === "paid",
+          can_refund: row.payment_status === "paid",
         },
 
         notes: null,
@@ -378,7 +376,6 @@ exports.getAllOrders = async (req, res, next) => {
         o.payment_method,
         o.payment_status,
         o.order_status,
-        o.financial_status,
         o.subtotal,
         o.tax,
         o.shipping_fee,
@@ -421,7 +418,6 @@ exports.getAllOrders = async (req, res, next) => {
       payment: {
         method: row.payment_method,
         status: row.payment_status,
-        financial_status: row.financial_status,
         transaction_id: row.stripe_payment_intent_id || row.stripe_session_id || null,
       },
       pricing: {
@@ -473,7 +469,6 @@ exports.getOrderById = async (req, res, next) => {
         o.payment_method,
         o.payment_status,
         o.order_status,
-        o.financial_status,
         o.payment_due_amount,
         o.subtotal,
         o.tax,
@@ -584,7 +579,6 @@ exports.getOrderById = async (req, res, next) => {
       payment: {
         method: row.payment_method,
         status: row.payment_status,
-        financial_status: row.financial_status,
         payment_due_amount: Number(row.payment_due_amount),
         transaction_id: row.stripe_payment_intent_id || row.stripe_session_id || null,
       },
@@ -640,7 +634,6 @@ exports.getMyOrderById = async (req, res, next) => {
         o.payment_method,
         o.payment_status,
         o.order_status,
-        o.financial_status,
         o.subtotal,
         o.tax,
         o.shipping_fee,
@@ -739,7 +732,7 @@ exports.getMyOrderById = async (req, res, next) => {
       permissions: {
         can_cancel: ["pending", "confirmed"].includes(row.order_status),
         can_return: canReturn,
-        can_refund: row.financial_status === "paid",
+        can_refund: row.payment_status === "paid",
       },
       created_at: row.created_at,
       updated_at: row.updated_at,
@@ -840,10 +833,9 @@ exports.updatePaymentStatus = async (req, res, next) => {
 
   try {
     const { orderId } = req.params;
-    const { payment_status, financial_status } = req.body;
+    const { payment_status } = req.body;
 
     const validPaymentStatuses = ["pending", "paid", "failed", "refunded"];
-    const validFinancialStatuses = ["unpaid", "paid", "partially_refunded", "refunded"];
 
     if (payment_status && !validPaymentStatuses.includes(payment_status)) {
       return res.status(400).json({
@@ -852,15 +844,8 @@ exports.updatePaymentStatus = async (req, res, next) => {
       });
     }
 
-    if (financial_status && !validFinancialStatuses.includes(financial_status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid financial_status. Must be one of: ${validFinancialStatuses.join(", ")}`,
-      });
-    }
-
     // Check if order exists
-    const checkQuery = "SELECT id, payment_status, financial_status FROM orders WHERE id = $1";
+    const checkQuery = "SELECT id, payment_status FROM orders WHERE id = $1";
     const checkResult = await client.query(checkQuery, [orderId]);
 
     if (!checkResult.rows.length) {
@@ -878,23 +863,16 @@ exports.updatePaymentStatus = async (req, res, next) => {
       params.push(payment_status);
       paramIndex++;
 
-      // Auto-update financial status when payment is marked paid
-      if (payment_status === "paid" && !financial_status) {
-        updates.push(`financial_status = 'paid'`);
+      // Keep due amount aligned with payment state.
+      if (payment_status === "paid") {
         updates.push(`payment_due_amount = 0`);
       }
-    }
-
-    if (financial_status) {
-      updates.push(`financial_status = $${paramIndex}`);
-      params.push(financial_status);
-      paramIndex++;
     }
 
     if (!updates.length) {
       return res.status(400).json({
         success: false,
-        message: "No valid fields to update. Provide payment_status or financial_status.",
+        message: "No valid fields to update. Provide payment_status.",
       });
     }
 
@@ -905,7 +883,7 @@ exports.updatePaymentStatus = async (req, res, next) => {
       UPDATE orders
       SET ${updates.join(", ")}
       WHERE id = $${paramIndex}
-      RETURNING id, order_number, payment_status, financial_status, payment_due_amount, updated_at
+      RETURNING id, order_number, payment_status, payment_due_amount, updated_at
     `;
 
     const updateResult = await client.query(updateQuery, params);
@@ -917,10 +895,8 @@ exports.updatePaymentStatus = async (req, res, next) => {
         id: updateResult.rows[0].id,
         order_number: updateResult.rows[0].order_number,
         payment_status: updateResult.rows[0].payment_status,
-        financial_status: updateResult.rows[0].financial_status,
         payment_due_amount: Number(updateResult.rows[0].payment_due_amount),
         previous_payment_status: current.payment_status,
-        previous_financial_status: current.financial_status,
         updated_at: updateResult.rows[0].updated_at,
       },
     });

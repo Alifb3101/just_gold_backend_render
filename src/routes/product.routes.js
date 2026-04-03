@@ -12,7 +12,7 @@ const role = require("../middlewares/role.middleware");
    - Scalable cloud storage solution
 ========================================================= */
 
-const MAX_VARIANTS = 20;
+const MAX_VARIANTS = 50;
 
 const buildVariantFields = () => {
   const fields = [];
@@ -38,7 +38,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 100 * 1024 * 1024, // 100MB max
-    files: 80,
+    files: 20 + MAX_VARIANTS * 5,
   },
 }).fields(uploadFields);
 
@@ -443,6 +443,7 @@ router.post("/products", uploadHandler, controller.createProduct);
 router.put("/products/:id", uploadHandler, controller.updateProduct);
 router.post("/products/:id/upload", uploadHandler, controller.updateProduct);
 router.delete("/products/:id", controller.deleteProduct);
+router.get("/products/:id", controller.getProductDetail);
 router.get("/products/:id-:slug", controller.getProductDetail);
 // Backward-compat: legacy singular route
 router.get("/product/:id-:slug", controller.getProductDetail);

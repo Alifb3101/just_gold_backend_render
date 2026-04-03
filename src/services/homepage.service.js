@@ -1,11 +1,10 @@
 const { getRedisClient } = require("../config/redis");
 const { fetchHomepageProducts } = require("../repositories/homepage.repository");
-const { getMediaUrl } = require("./media.service");
 
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 20;
 const CACHE_TTL_SECONDS = 600;
-const CACHE_KEY = "homepage:data:v2";
+const CACHE_KEY = "homepage:data:v3";
 const HOMEPAGE_SECTIONS = ["best_seller", "new_arrivals", "deal_of_the_day", "trending"];
 
 const normalizeLimit = (rawLimit) => {
@@ -39,7 +38,7 @@ const buildPayload = (rows) => {
       id: row.id,
       name: row.name,
       description: row.description,
-      thumbnail: row.thumbnail_key ? getMediaUrl(row.thumbnail_key) : row.thumbnail,
+      thumbnail: row.thumbnail,
       price: Number(row.price),
       discount_price: row.discount_price !== null ? Number(row.discount_price) : null,
     });
