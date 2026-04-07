@@ -11,6 +11,8 @@ const {
 } = require("../services/product.service");
 const { logSearchQuery } = require("../services/search.service");
 const { getRedisClient } = require("../config/redis");
+const logger = require("../config/logger");
+const { pingGoogleSitemap } = require("../services/sitemap-ping.service");
 
 const COLOR_PANEL_TYPES = ["hex", "gradient", "image"];
 const CATEGORY_SECTION_RULES = {
@@ -21,38 +23,6 @@ const CATEGORY_SECTION_RULES = {
 const TAG_TYPES = ["country", "badge"];
 const TAG_CODE_REGEX = /^[A-Z0-9_-]{1,24}$/;
 const MAX_TAGS = 20;
-
-let ensuredProductTagsColumn = false;
-
-const ensureProductTagsColumn = async (client) => {
-  if (ensuredProductTagsColumn) return;
-  const runner = client || pool;
-  await runner.query(
-    `ALTER TABLE products ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]'::jsonb`
-  );
-  await runner.query(
-    `CREATE INDEX IF NOT EXISTS idx_products_tags ON products USING GIN (tags)`
-  );
-  await runner.query(`UPDATE products SET tags = '[]'::jsonb WHERE tags IS NULL`);
-  await runner.query(
-    `DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'products' AND column_name = 'tag'
-      ) THEN
-        UPDATE products
-        SET tags = jsonb_build_array(jsonb_build_object('type', 'badge', 'code', UPPER(TRIM(tag))))
-        WHERE (tags IS NULL OR tags = '[]'::jsonb)
-          AND tag IS NOT NULL
-          AND TRIM(tag) <> ''
-          AND UPPER(TRIM(tag)) ~ '^[A-Z0-9_-]{1,24}$';
-      END IF;
-    END
-    $$;`
-  );
-  ensuredProductTagsColumn = true;
-};
 
 const normalizeTagsInput = (rawTags, legacyTag, { required = false } = {}) => {
   if (rawTags === undefined || rawTags === null || rawTags === "") {
@@ -382,8 +352,6 @@ const validateColorPanel = (rawType, rawValue, { requireValue, uploadedUrl }) =>
 ========================================================= */
 exports.getProducts = async (req, res, next) => {
   try {
-    await ensureProductTagsColumn();
-
     const rawTagFilter = req.query.tagCode || req.query.tag;
 
     const filters = normalizeFilters({
@@ -478,8 +446,6 @@ exports.getProducts = async (req, res, next) => {
 ========================================================= */
 exports.getProductDetail = async (req, res, next) => {
   try {
-    await ensureProductTagsColumn();
-
     const productId = parseInt(req.params.id, 10);
 
     if (Number.isNaN(productId)) {
@@ -510,6 +476,7 @@ exports.getProductDetail = async (req, res, next) => {
       }
     }
 
+    const productQueryStart = process.hrtime.bigint();
     const productResult = await pool.query(
       `
       SELECT 
@@ -536,6 +503,15 @@ exports.getProductDetail = async (req, res, next) => {
       `,
       [productId]
     );
+    logger.debug(
+      {
+        event: "db_query_timing",
+        query: "product",
+        durationMs: Number((Number(process.hrtime.bigint() - productQueryStart) / 1e6).toFixed(2)),
+        productId,
+      },
+      "Product detail query timing"
+    );
 
     if (!productResult.rows.length) {
       return res.status(404).json({ message: "Product not found" });
@@ -543,6 +519,7 @@ exports.getProductDetail = async (req, res, next) => {
 
     const product = productResult.rows[0];
 
+    const variantsQueryStart = process.hrtime.bigint();
     const variantsResult = await pool.query(
       `
       SELECT 
@@ -566,7 +543,17 @@ exports.getProductDetail = async (req, res, next) => {
       `,
       [product.id]
     );
+    logger.debug(
+      {
+        event: "db_query_timing",
+        query: "variants",
+        durationMs: Number((Number(process.hrtime.bigint() - variantsQueryStart) / 1e6).toFixed(2)),
+        productId: product.id,
+      },
+      "Product variants query timing"
+    );
 
+    const mediaQueryStart = process.hrtime.bigint();
     const mediaResult = await pool.query(
       `
       SELECT id, image_url, media_type, image_key, media_provider
@@ -576,11 +563,33 @@ exports.getProductDetail = async (req, res, next) => {
       `,
       [product.id]
     );
+    logger.debug(
+      {
+        event: "db_query_timing",
+        query: "media",
+        durationMs: Number((Number(process.hrtime.bigint() - mediaQueryStart) / 1e6).toFixed(2)),
+        productId: product.id,
+      },
+      "Product media query timing"
+    );
 
     const normalizedRequestedSlug = (requestedSlug || "").trim().toLowerCase();
     const normalizedProductSlug = (product.slug || "").trim().toLowerCase();
     const canonicalUrl = `/api/v1/product/${product.id}-${product.slug}`;
     const requestedPath = `${req.baseUrl}${req.path}`;
+    const imageVariantMemo = new Map();
+
+    const getCachedImageVariants = (imageKey, mediaProvider) => {
+      if (!imageKey || typeof imageKey !== "string") return null;
+      const provider = String(mediaProvider || "cloudinary").toLowerCase();
+      const memoKey = `${provider}::${imageKey}`;
+      if (imageVariantMemo.has(memoKey)) {
+        return imageVariantMemo.get(memoKey);
+      }
+      const variants = buildImageKitVariants(imageKey, provider);
+      imageVariantMemo.set(memoKey, variants);
+      return variants;
+    };
 
     const visibleVariants = variantsResult.rows.filter((variant) => {
       const isSyntheticDefault =
@@ -600,7 +609,7 @@ exports.getProductDetail = async (req, res, next) => {
     const resolvedMedia = mediaResult.rows.map((media) => ({
       ...media,
       image_url: resolveMediaUrl(media.image_url, media.image_key, media.media_provider, 'product'),
-      image_variants: buildImageKitVariants(media.image_key, media.media_provider),
+      image_variants: getCachedImageVariants(media.image_key, media.media_provider),
     }));
 
     const primaryVariant = visibleVariants[0] || null;
@@ -633,9 +642,9 @@ exports.getProductDetail = async (req, res, next) => {
       variants: visibleVariants.map((variant) => ({
         ...variant,
         main_image: resolveMediaUrl(variant.main_image, variant.main_image_key, variant.media_provider, 'product'),
-        main_image_variants: buildImageKitVariants(variant.main_image_key, variant.media_provider),
+        main_image_variants: getCachedImageVariants(variant.main_image_key, variant.media_provider),
         secondary_image: resolveMediaUrl(variant.secondary_image, variant.secondary_image_key, variant.media_provider, 'product'),
-        secondary_image_variants: buildImageKitVariants(variant.secondary_image_key, variant.media_provider),
+        secondary_image_variants: getCachedImageVariants(variant.secondary_image_key, variant.media_provider),
       })),
       media: resolvedMedia,
     };
@@ -649,7 +658,7 @@ exports.getProductDetail = async (req, res, next) => {
     }
 
     if (redis) {
-      await redis.set(cacheKey, JSON.stringify(productPayload), { EX: 60 });
+      await redis.set(cacheKey, JSON.stringify(productPayload), { EX: 600 });
     }
 
     res.json(productPayload);
@@ -706,8 +715,6 @@ exports.createProduct = async (req, res, next) => {
     });
 
     const categoryId = pickCategoryId(req.body);
-
-    await ensureProductTagsColumn(client);
 
     const tagsValidation = normalizeTagsInput(rawTags, legacyTag, { required: true });
     if (tagsValidation.error) {
@@ -1023,6 +1030,8 @@ exports.createProduct = async (req, res, next) => {
 
     await client.query("COMMIT");
 
+    void pingGoogleSitemap();
+
     res.status(201).json({
       message: "Product Created Successfully",
       product_id: productId,
@@ -1068,8 +1077,6 @@ exports.updateProduct = async (req, res, next) => {
 
   try {
     await client.query("BEGIN");
-
-    await ensureProductTagsColumn(client);
 
     // Accept id from multiple places; ignore literal "undefined" param
     const paramIdRaw = req.params?.id;
@@ -1516,6 +1523,8 @@ exports.updateProduct = async (req, res, next) => {
 
     await client.query("COMMIT");
 
+    void pingGoogleSitemap();
+
     /* -------- Fetch Updated Product -------- */
 
     const updatedProduct = await pool.query(
@@ -1667,6 +1676,8 @@ exports.deleteProduct = async (req, res, next) => {
     );
 
     await client.query("COMMIT");
+
+    void pingGoogleSitemap();
 
     res.json({
       message: `Product "${productName}" deleted successfully`,

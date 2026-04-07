@@ -2,6 +2,14 @@ const pool = require("../config/db");
 const { ApiError } = require("../utils/apiError");
 const redisClient = require("../config/redis"); 
 
+const REVIEW_SORT_SQL = Object.freeze({
+  recent: "r.created_at DESC",
+  helpful: "(r.helpful_count - r.unhelpful_count) DESC, r.created_at DESC",
+  "rating-high": "r.rating DESC, r.created_at DESC",
+  "rating-low": "r.rating ASC, r.created_at DESC",
+});
+const REVIEW_SORT_SQL_VALUES = new Set(Object.values(REVIEW_SORT_SQL));
+
 /**
  * @desc    Get all reviews for a product with pagination
  * @route   GET /api/v1/products/:productId/reviews
@@ -24,14 +32,11 @@ const getProductReviews = async (req, res, next) => {
     const limitNum = Math.min(Math.max(1, parseInt(limit)), 100); // Max 100 per page
     const offset = (pageNum - 1) * limitNum;
 
-    // Build sort query
-    let orderBy = "r.created_at DESC";
-    if (sortBy === "helpful") {
-      orderBy = "(r.helpful_count - r.unhelpful_count) DESC, r.created_at DESC";
-    } else if (sortBy === "rating-high") {
-      orderBy = "r.rating DESC, r.created_at DESC";
-    } else if (sortBy === "rating-low") {
-      orderBy = "r.rating ASC, r.created_at DESC";
+    const requestedSort = typeof sortBy === "string" ? sortBy : "recent";
+    const orderBy = REVIEW_SORT_SQL[requestedSort] || REVIEW_SORT_SQL.recent;
+    // Dynamic ORDER BY is safe because it is selected from a fixed server-side map.
+    if (!REVIEW_SORT_SQL_VALUES.has(orderBy)) {
+      return next(new ApiError(400, "Invalid sort option", "INVALID_SORT"));
     }
 
     // Check if product exists

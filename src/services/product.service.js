@@ -9,6 +9,17 @@ const SORT_OPTIONS = {
 	popular: { orderBy: "p.base_stock", direction: "DESC" },
 };
 
+const ALLOWED_SORT_COLUMNS = new Set(Object.values(SORT_OPTIONS).map((opt) => opt.orderBy));
+const ALLOWED_SORT_DIRECTIONS = new Set(["ASC", "DESC"]);
+
+const assertSafeSqlFragment = (condition, message) => {
+	if (!condition) {
+		const err = new Error(message);
+		err.status = 400;
+		throw err;
+	}
+};
+
 const toNumber = (raw) => {
 	// Treat undefined, null, and empty string as null to avoid accidental 0 filters
 	if (raw === undefined || raw === null || raw === "") return null;
@@ -166,9 +177,12 @@ const buildProductsQuery = (rawFilters = {}) => {
 	}
 
 	const sortMeta = SORT_OPTIONS[filters.sort] || SORT_OPTIONS.newest;
+	assertSafeSqlFragment(ALLOWED_SORT_COLUMNS.has(sortMeta.orderBy), "Invalid sort column");
+	assertSafeSqlFragment(ALLOWED_SORT_DIRECTIONS.has(sortMeta.direction), "Invalid sort direction");
 	const cursorOp = sortMeta.direction === "ASC" ? ">" : "<";
 	const useOffsetPagination = filters.cursor === null && (rawFilters.page !== undefined || rawFilters.limit !== undefined);
 	const pageSize = filters.limit;
+	assertSafeSqlFragment(Number.isInteger(pageSize) && pageSize >= 1 && pageSize <= MAX_PAGE_SIZE, "Invalid page size");
 
 	if (filters.cursor !== null) {
 		values.push(filters.cursor);
@@ -183,6 +197,7 @@ const buildProductsQuery = (rawFilters = {}) => {
 		offsetClause = `\n\t\tOFFSET $${values.length}`;
 	}
 
+	// Dynamic ORDER BY uses only allowlisted server-side tokens, never raw request input.
 	const orderClause = `${sortMeta.orderBy} ${sortMeta.direction}, p.id ${sortMeta.direction}`;
 
 	const text = `

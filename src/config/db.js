@@ -1,4 +1,5 @@
 const { Pool } = require("pg");
+const logger = require("./logger");
 
 const buildPoolConfig = () => {
   // For DATABASE_URL (Supabase), SSL is handled via connection string
@@ -50,19 +51,19 @@ const pool = new Pool(buildPoolConfig());
 
 // Handle pool errors to prevent connection leaks
 pool.on('error', (err) => {
-  console.error('❌ Unexpected error on idle client in pool:', err);
+  logger.error({ event: "db_pool_error", err }, "Unexpected error on idle client in pool");
 });
 
 pool.on('connect', () => {
-  console.log('[DB POOL] New connection established');
+  logger.debug({ event: "db_pool_connect" }, "DB pool connection established");
 });
 
 pool.on('remove', () => {
-  console.log('[DB POOL] Connection removed from pool');
+  logger.debug({ event: "db_pool_remove" }, "DB pool connection removed");
 });
 
 pool.connect()
-  .then(() => console.log("✅ PostgreSQL Connected Successfully"))
-  .catch(err => console.error("❌ DB Connection Error:", err));
+  .then(() => logger.info({ event: "db_connected" }, "PostgreSQL connected successfully"))
+  .catch((err) => logger.error({ event: "db_connect_error", err }, "DB connection error"));
 
 module.exports = pool;

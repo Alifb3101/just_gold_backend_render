@@ -1,5 +1,19 @@
 const router = require("express").Router();
 const pool = require("../config/db");
+const { pingGoogleSitemap } = require("../services/sitemap-ping.service");
+
+router.use((req, res, next) => {
+  res.on("finish", () => {
+    if (
+      ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) &&
+      res.statusCode >= 200 &&
+      res.statusCode < 400
+    ) {
+      void pingGoogleSitemap();
+    }
+  });
+  next();
+});
 
 /* -------- GET ALL CATEGORIES WITH SUBCATEGORIES -------- */
 

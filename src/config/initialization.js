@@ -129,12 +129,71 @@ const ensureGuestCartSchema = async () => {
 };
 
 /**
+ * Ensure product tags schema compatibility once at startup
+ * (moved out of request lifecycle for performance)
+ */
+const ensureProductTagsSchema = async () => {
+  const client = await pool.connect();
+  try {
+    initializationLog("🔄 Initializing product tags schema...");
+
+    await client.query("BEGIN");
+
+    await client.query(
+      `ALTER TABLE products ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]'::jsonb`
+    );
+    initializationLog("✓ products.tags column added/verified");
+
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_products_tags ON products USING GIN (tags)`
+    );
+    initializationLog("✓ products.tags index added/verified");
+
+    await client.query(`UPDATE products SET tags = '[]'::jsonb WHERE tags IS NULL`);
+    initializationLog("✓ null tags backfilled");
+
+    await client.query(
+      `DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'products' AND column_name = 'tag'
+        ) THEN
+          UPDATE products
+          SET tags = jsonb_build_array(jsonb_build_object('type', 'badge', 'code', UPPER(TRIM(tag))))
+          WHERE (tags IS NULL OR tags = '[]'::jsonb)
+            AND tag IS NOT NULL
+            AND TRIM(tag) <> ''
+            AND UPPER(TRIM(tag)) ~ '^[A-Z0-9_-]{1,24}$';
+        END IF;
+      END
+      $$;`
+    );
+    initializationLog("✓ legacy tag migration applied/verified");
+
+    await client.query("COMMIT");
+    initializationLog("✅ Product tags schema initialization complete!\n");
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackErr) {
+      console.warn("[DB_INIT] ROLLBACK failed (connection may be down):", rollbackErr.message);
+    }
+    initializationLog("❌ Product tags schema initialization failed:", err.message);
+    console.error("[DB_INIT] Product tags initialization error:", err.message);
+  } finally {
+    client.release();
+  }
+};
+
+/**
  * Initialize database on server startup
  */
 const initializeDatabase = async () => {
   try {
     initializationLog("Starting database initialization...");
     await ensureGuestCartSchema();
+    await ensureProductTagsSchema();
   } catch (err) {
     initializationLog("⚠️  Database initialization failed (non-fatal):", err.message);
     console.warn("[DB_INIT] Server will continue running. Check database connection.");

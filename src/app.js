@@ -4,6 +4,8 @@ const helmet = require("helmet");
 const compression = require("compression");
 const rateLimit = require("express-rate-limit");
 const cookieParser = require("cookie-parser");
+const requestLogger = require("./middlewares/request-logger.middleware");
+const errorLogger = require("./middlewares/error-logger.middleware");
 
 const app = express();
 
@@ -38,7 +40,33 @@ app.use(cors(corsOptions));
 /* ---------------- SECURITY ---------------- */
 
 // Secure headers
-app.use(helmet());
+app.use(
+  helmet({
+    // Remove X-Powered-By header to reduce framework fingerprinting.
+    // Keep COEP disabled so cross-origin media/CDN assets are not blocked.
+    hidePoweredBy: true,
+  crossOriginEmbedderPolicy: false,
+
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  referrerPolicy: { policy: "no-referrer-when-downgrade" },
+    // Basic CSP: allow same-origin resources and HTTPS CDNs (Cloudinary/ImageKit/etc.).
+    // Kept intentionally permissive to avoid breaking existing frontend integrations.
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        defaultSrc: ["'self'", "https:"],
+        scriptSrc: ["'self'", "https:", "'unsafe-inline'"],
+        styleSrc: ["'self'", "https:", "'unsafe-inline'"],
+        imgSrc: ["'self'", "https:", "data:", "blob:"],
+        connectSrc: ["'self'", "https:", "http:"],
+        fontSrc: ["'self'", "https:", "data:"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        frameAncestors: ["'self'", "https:"],
+      },
+    },
+  })
+);
 
 // JSON parsing
 app.use(compression());
@@ -46,19 +74,28 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Structured request logging for method, route, status, and response time.
+app.use(requestLogger);
+
 // NOTE: All media now stored in Cloudinary - no local uploads folder needed
 
 // Rate limiting (configurable via env)
 const parsedWindowMs = Number.parseInt(process.env.RATE_LIMIT_WINDOW_MS || "900000", 10);
-const parsedMax = Number.parseInt(process.env.RATE_LIMIT_MAX || "1000", 10);
+const parsedMax = Number.parseInt(process.env.RATE_LIMIT_MAX || "300", 10);
 
 app.use(
   rateLimit({
     windowMs: Number.isInteger(parsedWindowMs) && parsedWindowMs > 0 ? parsedWindowMs : 15 * 60 * 1000,
-    max: Number.isInteger(parsedMax) && parsedMax > 0 ? parsedMax : 1000,
+    max: Number.isInteger(parsedMax) && parsedMax > 0 ? parsedMax : 300,
     standardHeaders: true,
     legacyHeaders: false,
     skip: (req) => req.method === "OPTIONS",
+    handler: (req, res) => {
+      res.status(429).json({
+        success: false,
+        message: "Too many requests, please try again later",
+      });
+    },
   })
 );
 
@@ -69,6 +106,9 @@ app.get("/", (req, res) => {
 });
 
 /* ---------------- ROUTES ---------------- */
+
+// Keep sitemap routes ahead of any other route groups so backend always controls sitemap XML.
+app.use("/", require("./routes/sitemap.routes"));
 
 app.use("/api/webhook", require("./routes/webhook.routes"));
 app.use("/api/v1/auth", require("./routes/auth.routes"));
@@ -97,6 +137,8 @@ app.use((req, res) => {
 
 /* ---------------- GLOBAL ERROR ---------------- */
 
+// Log error details first, then keep existing error response middleware behavior unchanged.
+app.use(errorLogger);
 app.use(require("./middlewares/error.middleware"));
 
 module.exports = app;

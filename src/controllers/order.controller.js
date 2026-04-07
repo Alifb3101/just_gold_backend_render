@@ -2,6 +2,27 @@ const pool = require("../config/db");
 
 const VAT_PERCENT = Number(process.env.CHECKOUT_TAX_PERCENT || 0);
 
+const ADMIN_ORDER_WHERE_TEMPLATES = new Set([
+  "o.order_status = $n",
+  "o.payment_status = $n",
+  "o.payment_method = $n",
+  "( o.order_number ILIKE $n OR u.name ILIKE $n OR u.email ILIKE $n OR o.guest_email ILIKE $n OR o.guest_full_name ILIKE $n )",
+  "o.created_at >= $n",
+  "o.created_at <= $n",
+]);
+
+const normalizeWhereTemplate = (condition) =>
+  String(condition)
+    .replace(/\$\d+/g, "$n")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const assertSafeAdminWhereCondition = (condition) => {
+  if (!ADMIN_ORDER_WHERE_TEMPLATES.has(normalizeWhereTemplate(condition))) {
+    throw new Error("Unsafe admin order filter fragment");
+  }
+};
+
 exports.createOrder = async (req, res, next) => {
   const client = await pool.connect();
 
@@ -313,47 +334,60 @@ exports.getAllOrders = async (req, res, next) => {
     let paramIndex = 1;
 
     if (order_status) {
-      whereConditions.push(`o.order_status = $${paramIndex}`);
+      const condition = `o.order_status = $${paramIndex}`;
+      assertSafeAdminWhereCondition(condition);
+      whereConditions.push(condition);
       params.push(order_status);
       paramIndex++;
     }
 
     if (payment_status) {
-      whereConditions.push(`o.payment_status = $${paramIndex}`);
+      const condition = `o.payment_status = $${paramIndex}`;
+      assertSafeAdminWhereCondition(condition);
+      whereConditions.push(condition);
       params.push(payment_status);
       paramIndex++;
     }
 
     if (payment_method) {
-      whereConditions.push(`o.payment_method = $${paramIndex}`);
+      const condition = `o.payment_method = $${paramIndex}`;
+      assertSafeAdminWhereCondition(condition);
+      whereConditions.push(condition);
       params.push(payment_method);
       paramIndex++;
     }
 
     if (search) {
-      whereConditions.push(`(
+      const condition = `(
         o.order_number ILIKE $${paramIndex}
         OR u.name ILIKE $${paramIndex}
         OR u.email ILIKE $${paramIndex}
         OR o.guest_email ILIKE $${paramIndex}
         OR o.guest_full_name ILIKE $${paramIndex}
-      )`);
+      )`;
+      assertSafeAdminWhereCondition(condition);
+      whereConditions.push(condition);
       params.push(`%${search}%`);
       paramIndex++;
     }
 
     if (date_from) {
-      whereConditions.push(`o.created_at >= $${paramIndex}`);
+      const condition = `o.created_at >= $${paramIndex}`;
+      assertSafeAdminWhereCondition(condition);
+      whereConditions.push(condition);
       params.push(date_from);
       paramIndex++;
     }
 
     if (date_to) {
-      whereConditions.push(`o.created_at <= $${paramIndex}`);
+      const condition = `o.created_at <= $${paramIndex}`;
+      assertSafeAdminWhereCondition(condition);
+      whereConditions.push(condition);
       params.push(date_to);
       paramIndex++;
     }
 
+    // Dynamic WHERE assembly is restricted to validated server templates above.
     const whereClause = whereConditions.length
       ? `WHERE ${whereConditions.join(" AND ")}`
       : "";

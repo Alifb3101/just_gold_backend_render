@@ -1,10 +1,14 @@
+const logger = require("../config/logger");
+
 module.exports = (err, req, res, next) => {
-  console.error("[error]", {
+  logger.error({
+    event: "error_response",
     path: req.originalUrl,
     method: req.method,
     message: err?.message,
     code: err?.code,
     statusCode: err?.statusCode || err?.status,
+    stack: err?.stack,
   });
 
   const statusCode = err?.statusCode || err?.status || 500;

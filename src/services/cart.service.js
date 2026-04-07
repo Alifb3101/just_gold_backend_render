@@ -1,4 +1,5 @@
 const pool = require("../config/db");
+const logger = require("../config/logger");
 
 const createError = (status, message) => {
   const err = new Error(message);
@@ -19,6 +20,20 @@ const cartDebug = (event, payload = {}) => {
   console.log(`[cart][${stamp}] ${event}`, payload);
 };
 
+const logCartQueryTiming = (queryName, startedAt) => {
+  const durationMs = Number((Number(process.hrtime.bigint() - startedAt) / 1e6).toFixed(2));
+  logger.debug({ event: "cart_query", query: queryName, durationMs }, "Cart query timing");
+};
+
+const ALLOWED_OWNER_COLUMNS = new Set(["user_id", "guest_token"]);
+
+const assertSafeOwnerColumn = (column) => {
+  if (!ALLOWED_OWNER_COLUMNS.has(column)) {
+    throw createError(400, "Invalid cart owner scope");
+  }
+  return column;
+};
+
 const resolveOwner = (identity = {}) => {
   const normalizedUserId = Number.isInteger(identity.userId)
     ? identity.userId
@@ -27,11 +42,13 @@ const resolveOwner = (identity = {}) => {
   const guestToken = identity.guestToken || null;
 
   if (Number.isInteger(normalizedUserId)) {
-    return { column: "user_id", value: normalizedUserId, type: "user" };
+    // Dynamic SQL column interpolation is restricted to this allowlisted identifier.
+    return { column: assertSafeOwnerColumn("user_id"), value: normalizedUserId, type: "user" };
   }
 
   if (guestToken) {
-    return { column: "guest_token", value: guestToken, type: "guest" };
+    // Dynamic SQL column interpolation is restricted to this allowlisted identifier.
+    return { column: assertSafeOwnerColumn("guest_token"), value: guestToken, type: "guest" };
   }
 
   throw createError(401, "Unauthorized");
@@ -76,6 +93,7 @@ const ensureCartSchemaCompatibility = async () => {
 };
 
 const getActiveProduct = async (client, productId) => {
+  const startedAt = process.hrtime.bigint();
   const result = await client.query(
     `
     SELECT
@@ -94,16 +112,26 @@ const getActiveProduct = async (client, productId) => {
     `,
     [productId]
   );
+  logCartQueryTiming("product", startedAt);
 
   return result.rows[0] || null;
 };
 
 const getVariantByProductAndId = async (client, productId, variantId) => {
+  const startedAt = process.hrtime.bigint();
   const result = await client.query(
     `
     SELECT
       pv.id AS variant_id,
       pv.product_id,
+      p.name AS product_name,
+      p.base_price,
+      p.base_stock,
+      p.product_model_no,
+      p.thumbnail,
+      p.thumbnail_key,
+      p.afterimage,
+      p.afterimage_key,
       pv.stock,
       pv.price,
       pv.discount_price,
@@ -113,8 +141,7 @@ const getVariantByProductAndId = async (client, productId, variantId) => {
       pv.color_panel_value,
       pv.variant_model_no,
       pv.main_image,
-      pv.secondary_image,
-      p.name AS product_name
+      pv.secondary_image
     FROM product_variants pv
     JOIN products p ON p.id = pv.product_id
     WHERE pv.id = $1
@@ -124,16 +151,26 @@ const getVariantByProductAndId = async (client, productId, variantId) => {
     `,
     [variantId, productId]
   );
+  logCartQueryTiming("variant", startedAt);
 
   return result.rows[0] || null;
 };
 
 const getFirstVariantByProduct = async (client, productId) => {
+  const startedAt = process.hrtime.bigint();
   const result = await client.query(
     `
     SELECT
       pv.id AS variant_id,
       pv.product_id,
+      p.name AS product_name,
+      p.base_price,
+      p.base_stock,
+      p.product_model_no,
+      p.thumbnail,
+      p.thumbnail_key,
+      p.afterimage,
+      p.afterimage_key,
       pv.stock,
       pv.price,
       pv.discount_price,
@@ -143,8 +180,7 @@ const getFirstVariantByProduct = async (client, productId) => {
       pv.color_panel_value,
       pv.variant_model_no,
       pv.main_image,
-      pv.secondary_image,
-      p.name AS product_name
+      pv.secondary_image
     FROM product_variants pv
     JOIN products p ON p.id = pv.product_id
     WHERE pv.product_id = $1
@@ -165,6 +201,7 @@ const getFirstVariantByProduct = async (client, productId) => {
     `,
     [productId]
   );
+  logCartQueryTiming("variant", startedAt);
 
   return result.rows[0] || null;
 };
@@ -220,10 +257,7 @@ const addToCart = async (identity, payload = {}, options = {}) => {
       await client.query("BEGIN");
     }
 
-    const product = await getActiveProduct(client, productId);
-    if (!product) {
-      throw createError(404, "Product not found");
-    }
+    let product = null;
 
     let variant = null;
 
@@ -232,8 +266,39 @@ const addToCart = async (identity, payload = {}, options = {}) => {
       if (!variant) {
         throw createError(404, "Product variant not found for this product");
       }
+      product = {
+        id: variant.product_id,
+        name: variant.product_name,
+        base_price: variant.base_price,
+        base_stock: variant.base_stock,
+        product_model_no: variant.product_model_no,
+        thumbnail: variant.thumbnail,
+        thumbnail_key: variant.thumbnail_key,
+        afterimage: variant.afterimage,
+        afterimage_key: variant.afterimage_key,
+      };
     } else {
       variant = await getFirstVariantByProduct(client, productId);
+      if (variant) {
+        product = {
+          id: variant.product_id,
+          name: variant.product_name,
+          base_price: variant.base_price,
+          base_stock: variant.base_stock,
+          product_model_no: variant.product_model_no,
+          thumbnail: variant.thumbnail,
+          thumbnail_key: variant.thumbnail_key,
+          afterimage: variant.afterimage,
+          afterimage_key: variant.afterimage_key,
+        };
+      }
+    }
+
+    if (!product) {
+      product = await getActiveProduct(client, productId);
+      if (!product) {
+        throw createError(404, "Product not found");
+      }
     }
 
     const resolvedProductId = variant ? Number(variant.product_id) : Number(product.id);
@@ -244,15 +309,22 @@ const addToCart = async (identity, payload = {}, options = {}) => {
 
     const priceAtAdded = getEffectivePrice({ variant, product });
 
-    const existing = variant
-      ? await client.query(
+    let existing;
+    if (variant) {
+      const cartSelectStart = process.hrtime.bigint();
+      existing = await client.query(
         `SELECT id, quantity, price_at_added FROM cart_items WHERE ${owner.column} = $1 AND product_variant_id = $2 FOR UPDATE`,
         [owner.value, variant.variant_id]
-      )
-      : await client.query(
+      );
+      logCartQueryTiming("cart_select", cartSelectStart);
+    } else {
+      const cartSelectStart = process.hrtime.bigint();
+      existing = await client.query(
         `SELECT id, quantity, price_at_added FROM cart_items WHERE ${owner.column} = $1 AND product_id = $2 AND product_variant_id IS NULL FOR UPDATE`,
         [owner.value, productId]
       );
+      logCartQueryTiming("cart_select", cartSelectStart);
+    }
 
     const currentQty = existing.rows[0]?.quantity || 0;
     const newQuantity = currentQty + quantity;
@@ -273,6 +345,7 @@ const addToCart = async (identity, payload = {}, options = {}) => {
 
     let saved;
     if (existing.rows.length) {
+      const cartUpdateStart = process.hrtime.bigint();
       const updated = await client.query(
         `
         UPDATE cart_items
@@ -282,8 +355,10 @@ const addToCart = async (identity, payload = {}, options = {}) => {
         `,
         [newQuantity, existing.rows[0].id]
       );
+      logCartQueryTiming("cart_update", cartUpdateStart);
       saved = updated.rows[0];
     } else {
+      const cartUpdateStart = process.hrtime.bigint();
       const inserted = await client.query(
         `
         INSERT INTO cart_items (${owner.column}, product_id, product_variant_id, quantity, price_at_added)
@@ -292,6 +367,7 @@ const addToCart = async (identity, payload = {}, options = {}) => {
         `,
         [owner.value, productId, variant?.variant_id ?? null, newQuantity, priceAtAdded]
       );
+      logCartQueryTiming("cart_update", cartUpdateStart);
       saved = inserted.rows[0];
     }
 
@@ -427,10 +503,12 @@ const updateQuantityNoVariant = async (identity, productId, quantity) => {
 
 const removeFromCart = async (identity, variantId) => {
   const owner = resolveOwner(identity);
+  const cartDeleteStart = process.hrtime.bigint();
   const result = await pool.query(
     `DELETE FROM cart_items WHERE ${owner.column} = $1 AND product_variant_id = $2 RETURNING id`,
     [owner.value, variantId]
   );
+  logCartQueryTiming("cart_delete", cartDeleteStart);
   if (!result.rows.length) {
     throw createError(404, "Cart item not found");
   }
@@ -439,10 +517,12 @@ const removeFromCart = async (identity, variantId) => {
 
 const removeFromCartNoVariant = async (identity, productId) => {
   const owner = resolveOwner(identity);
+  const cartDeleteStart = process.hrtime.bigint();
   const result = await pool.query(
     `DELETE FROM cart_items WHERE ${owner.column} = $1 AND product_id = $2 AND product_variant_id IS NULL RETURNING id`,
     [owner.value, productId]
   );
+  logCartQueryTiming("cart_delete", cartDeleteStart);
   if (!result.rows.length) {
     throw createError(404, "Cart item not found");
   }

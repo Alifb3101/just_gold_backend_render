@@ -30,9 +30,11 @@
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
     "pg": "^8.18.0",
+    "pino": "^10.3.1",
     "redis": "^5.11.0",
     "stripe": "^20.3.1",
-    "xss-clean": "^0.1.4"
+    "xss-clean": "^0.1.4",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"
