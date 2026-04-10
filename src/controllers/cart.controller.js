@@ -41,6 +41,123 @@ const toIntOrNull = (value) => {
   return Number.isInteger(parsed) ? parsed : null;
 };
 
+const buildCartLineItems = (items = []) =>
+  items.map((item) => ({
+    productId: item.product_id,
+    variantId: item.product_variant_id,
+    productName: item.product_name,
+    unitPrice: Number(item.current_price),
+    quantity: Number(item.quantity),
+    totalPrice: Number(item.subtotal),
+  }));
+
+const buildTotalsPayload = ({ pricing, items }) => ({
+  items: items.reduce((acc, item) => acc + Number(item.quantity), 0),
+  subtotal: Number(pricing.subtotal),
+  discount: Number(pricing.discount),
+  tax: Number(pricing.tax),
+  shipping: Number(pricing.shippingFee),
+  total: Number(pricing.totalAmount),
+  currency: pricing.currency,
+});
+
+const buildEmptyCartPayload = () => ({
+  items: [],
+  totals: {
+    items: 0,
+    subtotal: 0,
+    discount: 0,
+    tax: 0,
+    shipping: 0,
+    total: 0,
+    currency: "AED",
+  },
+  coupon: {
+    code: null,
+    type: null,
+    value: null,
+    discount_amount: 0,
+  },
+  free_shipping_remaining: FREE_SHIPPING_THRESHOLD,
+  is_free_shipping: false,
+});
+
+const resolveCouponCodeFromRequest = async ({ identity, req }) => {
+  let couponCode =
+    req.query.coupon || req.query.coupon_code || req.query.couponCode || null;
+
+  if (!couponCode) {
+    couponCode = await couponService.getAppliedCoupon(identity);
+  }
+
+  if (!couponCode) {
+    couponCode = req.cookies?.[COUPON_COOKIE] || null;
+  }
+
+  return couponCode;
+};
+
+const buildCartSnapshotPayload = async ({ identity, req, res }) => {
+  const items = await cartService.getCart(identity);
+
+  if (!items.length) {
+    await couponService.clearAppliedCoupon(identity);
+    clearCouponCookie(res);
+    return buildEmptyCartPayload();
+  }
+
+  const couponCode = await resolveCouponCodeFromRequest({ identity, req });
+
+  if (process.env.COUPON_DEBUG === "true") {
+    console.log("[coupon][cart.snapshot] incoming", {
+      couponCode,
+      itemsCount: items.length,
+      subtotal: items.reduce((sum, item) => sum + Number(item.subtotal), 0),
+    });
+  }
+
+  const cartLineItems = buildCartLineItems(items);
+  const client = await pool.connect();
+
+  let pricing;
+  let appliedCouponCode = couponCode;
+  try {
+    pricing = await orderService.computeTotals(client, cartLineItems, couponCode, identity);
+  } catch (couponErr) {
+    if (couponErr.code && couponErr.code.startsWith("COUPON")) {
+      appliedCouponCode = null;
+      await couponService.clearAppliedCoupon(identity);
+      clearCouponCookie(res);
+      pricing = await orderService.computeTotals(client, cartLineItems, null, identity);
+    } else {
+      throw couponErr;
+    }
+  } finally {
+    client.release();
+  }
+
+  if (pricing.coupon?.code) {
+    await couponService.setAppliedCoupon(identity, pricing.coupon.code);
+    setCouponCookie(res, pricing.coupon.code);
+  } else if (appliedCouponCode) {
+    await couponService.clearAppliedCoupon(identity);
+    clearCouponCookie(res);
+  }
+
+  return {
+    items,
+    totals: buildTotalsPayload({ pricing, items }),
+    coupon: pricing.coupon || {
+      code: null,
+      type: null,
+      value: null,
+      discount_amount: 0,
+    },
+    free_shipping_remaining: pricing.freeShippingRemaining,
+    is_free_shipping: pricing.isFreeShipping,
+  };
+};
+
 exports.addToCart = async (req, res, next) => {
   try {
     const identity = req.identity;
@@ -83,6 +200,8 @@ exports.addToCart = async (req, res, next) => {
       0
     );
 
+    const cart = await buildCartSnapshotPayload({ identity, req, res });
+
     return res.status(201).json({
       message: "Added to cart",
       item: {
@@ -109,6 +228,7 @@ exports.addToCart = async (req, res, next) => {
         secondary_image: resolvedVariant.secondary_image ?? resolvedProduct.afterimage ?? null,
         secondaryImage: resolvedVariant.secondary_image ?? resolvedProduct.afterimage ?? null,
       },
+      cart,
     });
   } catch (err) {
     return handleError(err, res, next);
@@ -144,12 +264,15 @@ exports.updateQuantity = async (req, res, next) => {
       item = await cartService.updateQuantityNoVariant(identity, productId, quantity);
     }
 
+    const cart = await buildCartSnapshotPayload({ identity, req, res });
+
     return res.json({
       message: "Cart updated",
       item: {
         ...item,
         price_at_added: Number(item.price_at_added),
       },
+      cart,
     });
   } catch (err) {
     return handleError(err, res, next);
@@ -182,7 +305,9 @@ exports.removeFromCart = async (req, res, next) => {
     } else {
       await cartService.removeFromCartNoVariant(identity, productId);
     }
-    return res.json({ message: "Removed from cart" });
+
+    const cart = await buildCartSnapshotPayload({ identity, req, res });
+    return res.json({ message: "Removed from cart", cart });
   } catch (err) {
     return handleError(err, res, next);
   }
@@ -191,114 +316,8 @@ exports.removeFromCart = async (req, res, next) => {
 exports.getCart = async (req, res, next) => {
   try {
     const identity = req.identity;
-    const items = await cartService.getCart(identity);
-
-    // If cart is empty, clear any stored coupon and return empty cart
-    if (!items.length) {
-      await couponService.clearAppliedCoupon(identity);
-      clearCouponCookie(res);
-      return res.json({
-        items: [],
-        totals: {
-          items: 0,
-          subtotal: 0,
-          discount: 0,
-          shipping: 0,
-          total: 0,
-          currency: "AED",
-        },
-        coupon: {
-          code: null,
-          type: null,
-          value: null,
-          discount_amount: 0,
-        },
-        free_shipping_remaining: FREE_SHIPPING_THRESHOLD,
-        is_free_shipping: false,
-      });
-    }
-
-    let couponCode =
-      req.query.coupon || req.query.coupon_code || req.query.couponCode || null;
-
-    if (!couponCode) {
-      couponCode = await couponService.getAppliedCoupon(identity);
-    }
-
-    if (!couponCode) {
-      couponCode = req.cookies?.[COUPON_COOKIE] || null;
-    }
-
-    if (process.env.COUPON_DEBUG === "true") {
-      console.log("[coupon][cart.getCart] incoming", {
-        couponCode,
-        itemsCount: items.length,
-        subtotal: items.reduce((sum, item) => sum + Number(item.subtotal), 0),
-      });
-    }
-
-    const cartLineItems = items.map((item) => ({
-      productId: item.product_id,
-      variantId: item.product_variant_id,
-      productName: item.product_name,
-      unitPrice: Number(item.current_price),
-      quantity: Number(item.quantity),
-      totalPrice: Number(item.subtotal),
-    }));
-
-    const client = await pool.connect();
-    let pricing;
-    let appliedCouponCode = couponCode;
-    try {
-      pricing = await orderService.computeTotals(client, cartLineItems, couponCode, identity);
-    } catch (couponErr) {
-      // If coupon validation fails (e.g., minimum not met, expired, etc.), 
-      // clear the invalid coupon and return cart without discount
-      if (couponErr.code && couponErr.code.startsWith("COUPON")) {
-        appliedCouponCode = null;
-        await couponService.clearAppliedCoupon(identity);
-        clearCouponCookie(res);
-        // Recalculate without coupon
-        pricing = await orderService.computeTotals(client, cartLineItems, null, identity);
-      } else {
-        throw couponErr;
-      }
-    } finally {
-      client.release();
-    }
-
-    if (pricing.coupon?.code) {
-      await couponService.setAppliedCoupon(identity, pricing.coupon.code);
-      setCouponCookie(res, pricing.coupon.code);
-    } else if (appliedCouponCode) {
-      // Coupon was provided but didn't result in a valid discount - clear it
-      await couponService.clearAppliedCoupon(identity);
-      clearCouponCookie(res);
-    }
-
-    const totals = {
-      items: items.reduce((acc, item) => acc + Number(item.quantity), 0),
-      subtotal: pricing.subtotal,
-      discount: pricing.discount,
-      shipping: pricing.shippingFee,
-      total: pricing.totalAmount,
-      currency: pricing.currency,
-    };
-
-    const coupon = pricing.coupon || {
-      code: null,
-      type: null,
-      value: null,
-      discount_amount: 0,
-    };
-
-    return res.json({
-      items,
-      totals,
-      coupon,
-      free_shipping_remaining: pricing.freeShippingRemaining,
-      is_free_shipping: pricing.isFreeShipping,
-    });
+    const snapshot = await buildCartSnapshotPayload({ identity, req, res });
+    return res.json(snapshot);
   } catch (err) {
     return handleError(err, res, next);
   }
@@ -321,14 +340,7 @@ exports.applyCoupon = async (req, res, next) => {
       throw new ApiError(400, "Cart is empty", "CART_EMPTY");
     }
 
-    const cartLineItems = items.map((item) => ({
-      productId: item.product_id,
-      variantId: item.product_variant_id,
-      productName: item.product_name,
-      unitPrice: Number(item.current_price),
-      quantity: Number(item.quantity),
-      totalPrice: Number(item.subtotal),
-    }));
+    const cartLineItems = buildCartLineItems(items);
 
     const client = await pool.connect();
     let pricing;
@@ -347,14 +359,7 @@ exports.applyCoupon = async (req, res, next) => {
       success: true,
       message: "Coupon applied",
       coupon: pricing.coupon,
-      totals: {
-        subtotal: pricing.subtotal,
-        discount: pricing.discount,
-        shipping: pricing.shippingFee,
-        tax: pricing.tax,
-        total: pricing.totalAmount,
-        currency: pricing.currency,
-      },
+      totals: buildTotalsPayload({ pricing, items }),
     });
   } catch (err) {
     return handleError(err, res, next);
@@ -373,14 +378,7 @@ exports.removeCoupon = async (req, res, next) => {
       throw new ApiError(400, "Cart is empty", "CART_EMPTY");
     }
 
-    const cartLineItems = items.map((item) => ({
-      productId: item.product_id,
-      variantId: item.product_variant_id,
-      productName: item.product_name,
-      unitPrice: Number(item.current_price),
-      quantity: Number(item.quantity),
-      totalPrice: Number(item.subtotal),
-    }));
+    const cartLineItems = buildCartLineItems(items);
 
     const client = await pool.connect();
     let pricing;
@@ -402,14 +400,7 @@ exports.removeCoupon = async (req, res, next) => {
         value: null,
         discount_amount: 0,
       },
-      totals: {
-        subtotal: pricing.subtotal,
-        discount: pricing.discount,
-        shipping: pricing.shippingFee,
-        tax: pricing.tax,
-        total: pricing.totalAmount,
-        currency: pricing.currency,
-      },
+      totals: buildTotalsPayload({ pricing, items }),
     });
   } catch (err) {
     return handleError(err, res, next);

@@ -4,6 +4,7 @@ const { clearCartByOwner } = require("./cart.service");
 const { buildStripeLineItems, createCheckoutSession } = require("./stripe.service");
 const couponService = require("./coupon.service");
 const { updateSalesStats, invalidateSuggestionCache } = require("./suggestion.service");
+const { syncBestSellerSection } = require("./best-seller.service");
 
 const CURRENCY = "AED";
 const TAX_PERCENT = Number(process.env.CHECKOUT_TAX_PERCENT || 0);
@@ -313,10 +314,11 @@ const computeTotals = async (client, items, couponCode, identity) => {
     identity,
   });
   const taxableBase = Math.max(0, subtotal - discount);
-  const tax = round2((taxableBase * TAX_PERCENT) / 100);
+  // Product prices are VAT-inclusive, so no extra tax should be added on top.
+  const tax = 0;
   const eligibleForFreeShipping = taxableBase >= FREE_SHIPPING_THRESHOLD;
   const shippingFee = round2(eligibleForFreeShipping ? 0 : DEFAULT_SHIPPING_FEE);
-  const totalAmount = round2(Math.max(0, taxableBase + tax + shippingFee));
+  const totalAmount = round2(Math.max(0, taxableBase + shippingFee));
   const freeShippingRemaining = round2(Math.max(0, FREE_SHIPPING_THRESHOLD - taxableBase));
 
    if (isCouponDebugEnabled()) {
@@ -647,6 +649,7 @@ const createOrderWithItems = async ({
   setImmediate(async () => {
     try {
       await updateSalesStats(productIds, quantities);
+      await syncBestSellerSection();
       await invalidateSuggestionCache();
     } catch (err) {
       console.error("[order] sales stats update failed:", err.message);

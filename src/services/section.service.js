@@ -86,15 +86,21 @@ const getSectionProducts = async ({ sectionName, limit }) => {
         p.name,
         p.slug,
         p.thumbnail,
-        p.base_price AS price
+        p.base_price AS price,
+        COALESCE(pss.total_sales, 0) AS total_sales,
+        COALESCE(pss.last_30_days_sales, 0) AS last_30_days_sales
       FROM products p
       JOIN product_sections ps ON p.id = ps.product_id
+      LEFT JOIN product_sales_stats pss ON pss.product_id = p.id
       WHERE ps.section_id = $1
       AND p.is_active = true
-      ORDER BY p.id DESC
+      ORDER BY
+        CASE WHEN $3::text = 'best_seller' THEN COALESCE(pss.total_sales, 0) END DESC,
+        CASE WHEN $3::text = 'best_seller' THEN COALESCE(pss.last_30_days_sales, 0) END DESC,
+        p.id DESC
       LIMIT $2
     `,
-    values: [sectionId, limit],
+    values: [sectionId, limit, sectionName],
   };
 
   const result = await pool.query(query);

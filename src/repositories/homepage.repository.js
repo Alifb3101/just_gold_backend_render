@@ -14,11 +14,15 @@ const fetchHomepageProducts = async ({ sectionNames, limit }) => {
           v.discount_price,
           ROW_NUMBER() OVER (
             PARTITION BY s.id
-            ORDER BY p.id DESC
+            ORDER BY
+              CASE WHEN s.name = 'best_seller' THEN COALESCE(pss.total_sales, 0) END DESC,
+              CASE WHEN s.name = 'best_seller' THEN COALESCE(pss.last_30_days_sales, 0) END DESC,
+              p.id DESC
           ) AS row_num
         FROM sections s
         JOIN product_sections ps ON ps.section_id = s.id
         JOIN products p ON p.id = ps.product_id
+        LEFT JOIN product_sales_stats pss ON pss.product_id = p.id
         LEFT JOIN LATERAL (
           SELECT pv.price, pv.discount_price
           FROM product_variants pv

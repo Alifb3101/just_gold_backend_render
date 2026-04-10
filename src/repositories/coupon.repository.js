@@ -19,6 +19,7 @@ const ensureSchema = async (client) => {
             code varchar(64) UNIQUE NOT NULL,
             discount_type varchar(32) NOT NULL CHECK (discount_type IN ('percentage', 'fixed')),
             discount_value numeric(12,2) NOT NULL CHECK (discount_value >= 0),
+            audience varchar(32) NOT NULL DEFAULT 'all' CHECK (audience IN ('all', 'users_only', 'guests_only')),
             min_order_amount numeric(12,2) NOT NULL DEFAULT 0,
             max_discount_amount numeric(12,2),
             usage_limit integer,
@@ -31,6 +32,24 @@ const ensureSchema = async (client) => {
             updated_at timestamptz NOT NULL DEFAULT NOW()
           )
         `);
+
+        await db.query("ALTER TABLE coupons ADD COLUMN IF NOT EXISTS audience varchar(32) NOT NULL DEFAULT 'all'");
+        await db.query(
+          `
+            DO $$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'coupons_audience_check'
+              ) THEN
+                ALTER TABLE coupons
+                ADD CONSTRAINT coupons_audience_check
+                CHECK (audience IN ('all', 'users_only', 'guests_only'));
+              END IF;
+            END $$;
+          `
+        );
 
         await db.query(`
           CREATE TABLE IF NOT EXISTS coupon_usages (
@@ -83,7 +102,7 @@ const ensureSchema = async (client) => {
 const findByCode = async (client, code) => {
   const result = await client.query(
     `
-      SELECT id, code, discount_type, discount_value, min_order_amount, max_discount_amount,
+      SELECT id, code, discount_type, discount_value, audience, min_order_amount, max_discount_amount,
              usage_limit, used_count, per_user_limit, start_date, end_date, is_active
       FROM coupons
       WHERE code = $1

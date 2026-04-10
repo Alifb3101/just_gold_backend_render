@@ -121,6 +121,20 @@ const calculateDiscountAmount = (coupon, subtotal) => {
   return round2(discount);
 };
 
+const normalizeCouponAudience = (coupon = {}) => {
+  const raw = String(coupon.audience || "").trim().toLowerCase();
+  if (raw === "users_only" || raw === "guests_only" || raw === "all") {
+    return raw;
+  }
+
+  // Backward-compatible fallback for existing welcome coupons until audience is set in DB.
+  if (/^welcome/i.test(String(coupon.code || ""))) {
+    return "users_only";
+  }
+
+  return "all";
+};
+
 const validateCoupon = async ({ client, code, subtotal, identity }) => {
   if (!code) {
     return { amount: 0, coupon: null };
@@ -159,6 +173,15 @@ const validateCoupon = async ({ client, code, subtotal, identity }) => {
   }
 
   const { userId, guestToken } = normalizeIdentity(identity);
+
+  const audience = normalizeCouponAudience(coupon);
+  if (audience === "users_only" && !userId) {
+    throw new ApiError(400, "This coupon is available for logged-in users only", "COUPON_LOGIN_REQUIRED");
+  }
+  if (audience === "guests_only" && !guestToken) {
+    throw new ApiError(400, "This coupon is available for guest checkout only", "COUPON_GUEST_ONLY");
+  }
+
   const usageStats = await couponRepository.getUsageStats(client, coupon.id, { userId, guestToken });
   if (coupon.per_user_limit && usageStats.user_used >= coupon.per_user_limit) {
     throw new ApiError(400, "Per-user coupon limit reached", "COUPON_PER_USER_LIMIT");
@@ -188,6 +211,7 @@ const validateCoupon = async ({ client, code, subtotal, identity }) => {
       max_discount_amount: coupon.max_discount_amount !== null && coupon.max_discount_amount !== undefined
         ? Number(coupon.max_discount_amount)
         : null,
+      audience,
       discount_amount: discountAmount,
       usage_limit: coupon.usage_limit,
       per_user_limit: coupon.per_user_limit,
