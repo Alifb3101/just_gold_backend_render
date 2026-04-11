@@ -7,6 +7,7 @@ const role = require("../middlewares/role.middleware");
 router.get("/", auth, controller.getMyOrders);
 router.post("/", auth, controller.createOrder);
 router.get("/my/:orderId", auth, controller.getMyOrderById);
+router.patch("/my/:orderId/cancel", auth, controller.cancelMyOrder);
 
 // Admin routes
 router.get("/admin/all", auth, role("admin"), controller.getAllOrders);

@@ -1,9 +1,9 @@
 const pool = require("../config/db");
 const { ApiError } = require("../utils/apiError");
 const { clearCartByOwner } = require("./cart.service");
-const { buildStripeLineItems, createCheckoutSession } = require("./stripe.service");
+const { buildStripeLineItems, createCheckoutSession, createRefund } = require("./stripe.service");
 const couponService = require("./coupon.service");
-const { updateSalesStats, invalidateSuggestionCache } = require("./suggestion.service");
+const { updateSalesStats, subtractSalesStats, invalidateSuggestionCache } = require("./suggestion.service");
 const { syncBestSellerSection } = require("./best-seller.service");
 
 const CURRENCY = "AED";
@@ -737,6 +737,46 @@ const deductStockForItems = async (client, items) => {
   }
 };
 
+const restoreStockForItems = async (client, items) => {
+  const { variantNeeds, productNeeds } = buildStockNeeds(items);
+
+  const variantIds = [...variantNeeds.keys()];
+  if (variantIds.length) {
+    const variantQty = variantIds.map((id) => Number(variantNeeds.get(id).qty));
+
+    await client.query(
+      `
+        WITH requested AS (
+          SELECT * FROM UNNEST($1::int[], $2::int[]) AS t(id, qty)
+        )
+        UPDATE product_variants pv
+        SET stock = pv.stock + r.qty
+        FROM requested r
+        WHERE pv.id = r.id
+      `,
+      [variantIds, variantQty]
+    );
+  }
+
+  const productIds = [...productNeeds.keys()];
+  if (productIds.length) {
+    const productQty = productIds.map((id) => Number(productNeeds.get(id).qty));
+
+    await client.query(
+      `
+        WITH requested AS (
+          SELECT * FROM UNNEST($1::int[], $2::int[]) AS t(id, qty)
+        )
+        UPDATE products p
+        SET base_stock = p.base_stock + r.qty
+        FROM requested r
+        WHERE p.id = r.id
+      `,
+      [productIds, productQty]
+    );
+  }
+};
+
 const createCodOrderFromCart = async ({ identity, shippingAddressId, guestShippingAddress, guestContact, couponCode }) => {
   const owner = resolveOwner(identity);
   const client = await pool.connect();
@@ -1165,6 +1205,104 @@ const getOrderSummary = async ({ identity, orderId }) => {
   }
 };
 
+const cancelOrder = async ({ identity, orderId, reason = "customer_request" }) => {
+  const owner = resolveOwner(identity);
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    console.log("[cancel] transaction begin", { orderId, owner, reason });
+
+    // Get order details
+    const orderResult = await client.query(
+      `
+        SELECT
+          o.id, o.order_number, o.order_status, o.payment_status, o.payment_method,
+          o.stripe_payment_intent_id, o.total_amount, o.user_id, o.guest_token,
+          oi.product_id, oi.variant_id, oi.quantity
+        FROM orders o
+        LEFT JOIN order_items oi ON o.id = oi.order_id
+        WHERE o.id = $1 AND ${owner.column} = $2
+      `,
+      [orderId, owner.value]
+    );
+
+    console.log("[cancel] query result", { rowCount: orderResult.rows.length, orderId, owner });
+
+    if (!orderResult.rows.length) {
+      throw new ApiError(404, "Order not found", "ORDER_NOT_FOUND");
+    }
+
+    const order = orderResult.rows[0];
+    if (order.order_status !== "pending" && order.order_status !== "confirmed") {
+      throw new ApiError(400, "Order cannot be cancelled at this stage", "INVALID_ORDER_STATUS");
+    }
+
+    // Get all order items
+    const items = orderResult.rows.map(row => ({
+      productId: row.product_id,
+      variantId: row.variant_id,
+      quantity: row.quantity,
+      productName: "", // Not needed for stock restore
+    }));
+
+    // Restore stock
+    await restoreStockForItems(client, items);
+
+    // Subtract sales stats
+    const productIds = items.map(item => item.productId);
+    const quantities = items.map(item => item.quantity);
+    await subtractSalesStats(productIds, quantities);
+
+    // Invalidate caches
+    await invalidateSuggestionCache();
+    await syncBestSellerSection();
+
+    // Process refund if paid
+    let refundId = null;
+    if (order.payment_status === "paid" && order.stripe_payment_intent_id) {
+      try {
+        const refund = await createRefund(order.stripe_payment_intent_id, null, reason);
+        refundId = refund.id;
+        await client.query(
+          `UPDATE orders SET payment_status = 'refunded' WHERE id = $1`,
+          [orderId]
+        );
+      } catch (refundError) {
+        console.error("Refund failed:", refundError.message);
+        // Continue with cancellation even if refund fails
+      }
+    }
+
+    // Reverse coupon usage
+    // Note: applied_cart_coupons is for cart persistence, not order-specific
+    // Since coupons are cleared from cart after order creation,
+    // and order is cancelled, coupon usage is effectively reversed
+    // No action needed here as coupon tracking is per cart, not per order
+
+    // Update order status (trigger will log history)
+    await client.query(
+      `
+        UPDATE orders
+        SET order_status = 'cancelled', updated_at = NOW()
+        WHERE id = $1
+      `,
+      [orderId]
+    );
+
+    await client.query("COMMIT");
+    console.log("[cancel] transaction commit", { orderId, refundId });
+
+    return { success: true, orderId, refundId };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[cancel] transaction rollback", { orderId, message: error.message });
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   buildCheckoutContext,
   prepareCheckoutContext,
@@ -1174,4 +1312,5 @@ module.exports = {
   processStripeSessionCompleted,
   getOrderSummary,
   computeTotals,
+  cancelOrder,
 };

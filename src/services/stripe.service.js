@@ -80,10 +80,26 @@ const constructWebhookEvent = (rawBody, signature) => {
   return stripe.webhooks.constructEvent(rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);
 };
 
+const createRefund = async (paymentIntentId, amount = null, reason = "requested_by_customer") => {
+  const stripe = getStripeClient();
+
+  const refundParams = {
+    payment_intent: paymentIntentId,
+    reason,
+  };
+
+  if (amount !== null) {
+    refundParams.amount = toMinorUnit(amount);
+  }
+
+  return stripe.refunds.create(refundParams);
+};
+
 module.exports = {
   getStripeClient,
   createCheckoutSession,
   buildStripeLineItems,
   constructWebhookEvent,
   toMinorUnit,
+  createRefund,
 };

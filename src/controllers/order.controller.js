@@ -1,4 +1,5 @@
 const pool = require("../config/db");
+const { cancelOrder } = require("../services/order.service");
 
 const VAT_PERCENT = Number(process.env.CHECKOUT_TAX_PERCENT || 0);
 
@@ -781,6 +782,35 @@ exports.getMyOrderById = async (req, res, next) => {
 };
 
 /**
+ * PATCH /api/v1/orders/my/:orderId/cancel
+ * Cancel user's own order
+ */
+exports.cancelMyOrder = async (req, res, next) => {
+  try {
+    const userId = req.user?.id;
+    const { orderId } = req.params;
+    const reason = req.body?.reason || 'customer_request';
+
+    console.log("[cancelMyOrder] request", { userId, orderId, reason });
+
+    if (!userId) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    const identity = { userId };
+    const result = await cancelOrder({ identity, orderId, reason });
+
+    return res.json({
+      success: true,
+      message: "Order cancelled successfully",
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * PATCH /api/v1/orders/admin/:orderId/status
  * Update order status (Admin only)
  */
@@ -829,6 +859,70 @@ exports.updateOrderStatus = async (req, res, next) => {
         success: false,
         message: `Cannot change status from ${currentStatus} to ${order_status}`,
       });
+    }
+
+    // Handle cancellation side effects
+    if (order_status === "cancelled") {
+      // Get order items for stock restore and sales stats
+      const itemsQuery = `
+        SELECT oi.product_id, oi.variant_id, oi.quantity
+        FROM order_items oi
+        WHERE oi.order_id = $1
+      `;
+      const itemsResult = await client.query(itemsQuery, [orderId]);
+      const items = itemsResult.rows.map(row => ({
+        productId: row.product_id,
+        variantId: row.variant_id,
+        quantity: row.quantity,
+        productName: "",
+      }));
+
+      // Restore stock
+      const { restoreStockForItems } = require("../services/order.service");
+      await restoreStockForItems(client, items);
+
+      // Subtract sales stats
+      const { subtractSalesStats } = require("../services/suggestion.service");
+      const productIds = items.map(item => item.productId);
+      const quantities = items.map(item => item.quantity);
+      await subtractSalesStats(productIds, quantities);
+
+      // Invalidate caches
+      const { invalidateSuggestionCache } = require("../services/suggestion.service");
+      const { syncBestSellerSection } = require("../services/best-seller.service");
+      await invalidateSuggestionCache();
+      await syncBestSellerSection();
+
+      // Get order payment info for refund
+      const orderInfoQuery = `
+        SELECT payment_status, stripe_payment_intent_id, total_amount
+        FROM orders WHERE id = $1
+      `;
+      const orderInfo = await client.query(orderInfoQuery, [orderId]).then(r => r.rows[0]);
+
+      // Process refund if paid
+      let refundId = null;
+      if (orderInfo.payment_status === "paid" && orderInfo.stripe_payment_intent_id) {
+        try {
+          const { createRefund } = require("../services/stripe.service");
+          const refund = await createRefund(orderInfo.stripe_payment_intent_id, null, "requested_by_customer");
+          refundId = refund.id;
+          await client.query(
+            `UPDATE orders SET payment_status = 'refunded' WHERE id = $1`,
+            [orderId]
+          );
+        } catch (refundError) {
+          console.error("Refund failed:", refundError.message);
+        }
+      }
+
+      // Reverse coupon usage
+      // Note: applied_cart_coupons is for cart persistence, not order-specific
+      // Since coupons are cleared from cart after order creation,
+      // and order is cancelled, coupon usage is effectively reversed
+      // No action needed here as coupon tracking is per cart, not per order
+
+      // Status update will be done below, trigger logs history
     }
 
     const updateQuery = `

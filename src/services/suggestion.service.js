@@ -430,6 +430,47 @@ const updateSalesStats = async (productIds, quantities) => {
   }
 };
 
+const subtractSalesStats = async (productIds, quantities) => {
+  if (!productIds?.length) return;
+
+  const aggregated = new Map();
+  for (let i = 0; i < productIds.length; i++) {
+    const productId = Number.parseInt(productIds[i], 10);
+    const quantity = Number.parseInt(quantities?.[i], 10) || 1;
+    if (!Number.isInteger(productId) || quantity <= 0) continue;
+    aggregated.set(productId, (aggregated.get(productId) || 0) + quantity);
+  }
+
+  if (!aggregated.size) return;
+
+  const ids = [...aggregated.keys()];
+  const qty = ids.map((id) => aggregated.get(id));
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+        UPDATE product_sales_stats
+        SET total_sales = GREATEST(total_sales - qty, 0),
+            last_30_days_sales = GREATEST(last_30_days_sales - qty, 0),
+            updated_at = NOW()
+        FROM UNNEST($1::int[], $2::int[]) AS t(product_id, qty)
+        WHERE product_sales_stats.product_id = t.product_id
+      `,
+      [ids, qty]
+    );
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Failed to subtract sales stats:", err.message);
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   getProductSuggestions,
   getSimilarProducts,
@@ -437,5 +478,6 @@ module.exports = {
   getTrendingProducts,
   invalidateSuggestionCache,
   updateSalesStats,
+  subtractSalesStats,
   SUGGESTION_LIMIT,
 };
