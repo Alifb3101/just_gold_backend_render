@@ -200,6 +200,8 @@ const buildProductsQuery = (rawFilters = {}) => {
 	// Dynamic ORDER BY uses only allowlisted server-side tokens, never raw request input.
 	const orderClause = `${sortMeta.orderBy} ${sortMeta.direction}, p.id ${sortMeta.direction}`;
 
+	// Always fetch pageSize + 1 to detect if there are more records
+	// The controller will trim to pageSize and set hasMore based on whether we got extra record
 	const text = `
 		SELECT
 			p.id,

@@ -120,6 +120,7 @@ app.use("/api/v1/addresses", require("./routes/address.routes"));
 app.use("/api/v1/users", require("./routes/user.routes"));
 app.use("/api/v1/cart", require("./routes/cart.routes"));
 app.use("/api/v1/wishlist", require("./routes/wishlist.routes"));
+app.use("/api/v1/contact", require("./routes/contact.routes"));
 app.use("/api/v1", require("./routes/suggestion.routes"));
 app.use("/api/v1", require("./routes/review.routes"));
 app.use("/api/checkout", require("./routes/checkout.routes"));
@@ -127,6 +128,7 @@ app.use("/api/v1/checkout", require("./routes/checkout.routes"));
 app.use("/api", require("./routes/section.routes"));
 app.use("/api/v1", require("./routes/section.routes"));
 app.use("/api/v1/settings", require("./routes/settings.routes"));
+app.use("/api/v1/inventory", require("./routes/inventory.routes"));
 
 
 /* ---------------- 404 HANDLER ---------------- */

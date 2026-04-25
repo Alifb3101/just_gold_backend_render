@@ -3,6 +3,9 @@ const controller = require("../controllers/order.controller");
 const auth = require("../middlewares/auth.middleware");
 const role = require("../middlewares/role.middleware");
 
+// Public/Guest routes
+router.get("/track", controller.trackOrder);
+
 // Customer routes
 router.get("/", auth, controller.getMyOrders);
 router.post("/", auth, controller.createOrder);

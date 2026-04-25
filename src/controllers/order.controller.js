@@ -1145,3 +1145,238 @@ exports.getOrderStats = async (req, res, next) => {
     client.release();
   }
 };
+
+/**
+ * GET /api/v1/orders/track
+ * Track order by order number and email (Guest/Public access)
+ */
+exports.trackOrder = async (req, res, next) => {
+  const client = await pool.connect();
+
+  try {
+    const { order_number, email } = req.query;
+
+    if (!order_number || !email) {
+      return res.status(400).json({
+        success: false,
+        message: "order_number and email are required",
+      });
+    }
+
+    // Normalize email to lowercase for case-insensitive comparison
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Check if coupons table exists
+    const couponsTableResult = await client.query(
+      `SELECT to_regclass('public.coupons')::text AS table_name`
+    );
+    const hasCouponsTable = Boolean(couponsTableResult.rows[0]?.table_name);
+
+    const orderQuery = hasCouponsTable
+      ? `
+        SELECT
+          o.id,
+          o.order_number,
+          o.payment_method,
+          o.payment_status,
+          o.order_status,
+          o.subtotal,
+          o.tax,
+          o.shipping_fee,
+          o.discount,
+          o.total_amount,
+          o.currency,
+          o.shipping_address_json,
+          o.is_guest_order,
+          o.guest_email,
+          o.guest_full_name,
+          o.guest_phone,
+          o.stripe_session_id,
+          o.stripe_payment_intent_id,
+          o.created_at,
+          o.updated_at,
+          u.id AS user_id,
+          u.name AS customer_name,
+          u.email AS customer_email,
+          u.phone AS customer_phone,
+          sc.coupon_code,
+          cp.discount_type AS coupon_discount_type,
+          cp.discount_value AS coupon_discount_value
+        FROM orders o
+        LEFT JOIN users u ON u.id = o.user_id
+        LEFT JOIN stripe_checkout_sessions sc ON sc.order_id = o.id
+        LEFT JOIN coupons cp ON cp.code = sc.coupon_code
+        WHERE o.order_number = $1
+          AND (
+            (o.is_guest_order = true AND LOWER(o.guest_email) = $2)
+            OR (o.is_guest_order = false AND LOWER(u.email) = $2)
+          )
+        LIMIT 1
+      `
+      : `
+        SELECT
+          o.id,
+          o.order_number,
+          o.payment_method,
+          o.payment_status,
+          o.order_status,
+          o.subtotal,
+          o.tax,
+          o.shipping_fee,
+          o.discount,
+          o.total_amount,
+          o.currency,
+          o.shipping_address_json,
+          o.is_guest_order,
+          o.guest_email,
+          o.guest_full_name,
+          o.guest_phone,
+          o.stripe_session_id,
+          o.stripe_payment_intent_id,
+          o.created_at,
+          o.updated_at,
+          u.id AS user_id,
+          u.name AS customer_name,
+          u.email AS customer_email,
+          u.phone AS customer_phone,
+          NULL::varchar AS coupon_code,
+          NULL::varchar AS coupon_discount_type,
+          NULL::numeric AS coupon_discount_value
+        FROM orders o
+        LEFT JOIN users u ON u.id = o.user_id
+        LEFT JOIN stripe_checkout_sessions sc ON sc.order_id = o.id
+        WHERE o.order_number = $1
+          AND (
+            (o.is_guest_order = true AND LOWER(o.guest_email) = $2)
+            OR (o.is_guest_order = false AND LOWER(u.email) = $2)
+          )
+        LIMIT 1
+      `;
+
+    const orderResult = await client.query(orderQuery, [order_number, normalizedEmail]);
+
+    if (!orderResult.rows.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found or email does not match",
+      });
+    }
+
+    const row = orderResult.rows[0];
+
+    // Get order items
+    const itemsQuery = `
+      SELECT
+        oi.id,
+        oi.product_id,
+        oi.variant_id,
+        oi.product_name_snapshot,
+        oi.price_snapshot,
+        oi.quantity,
+        oi.total_price,
+        oi.vat_percentage,
+        p.slug,
+        p.thumbnail,
+        p.product_model_no AS sku,
+        pv.shade,
+        pv.variant_model_no,
+        pv.main_image AS variant_image
+      FROM order_items oi
+      JOIN products p ON p.id = oi.product_id
+      LEFT JOIN product_variants pv ON pv.id = oi.variant_id
+      WHERE oi.order_id = $1
+      ORDER BY oi.id ASC
+    `;
+
+    const itemsResult = await client.query(itemsQuery, [row.id]);
+
+    const items = itemsResult.rows.map((item) => ({
+      id: item.id,
+      product_id: item.product_id,
+      variant_id: item.variant_id,
+      name: item.product_name_snapshot,
+      slug: item.slug,
+      thumbnail: item.variant_image || item.thumbnail,
+      sku: item.sku,
+      variant: {
+        shade: item.shade,
+        model_no: item.variant_model_no,
+      },
+      quantity: Number(item.quantity),
+      unit_price: Number(item.price_snapshot),
+      total_price: Number(item.total_price),
+      vat_percentage: Number(item.vat_percentage || 0),
+    }));
+
+    const shippingAddress = row.shipping_address_json || null;
+    const couponDiscountAmount = Number(row.discount || 0);
+
+    const order = {
+      id: row.id,
+      order_number: row.order_number,
+      is_guest_order: row.is_guest_order,
+      customer: {
+        id: row.user_id || null,
+        name: row.is_guest_order ? row.guest_full_name : row.customer_name,
+        email: row.is_guest_order ? row.guest_email : row.customer_email,
+        phone: row.is_guest_order ? row.guest_phone : row.customer_phone,
+      },
+      payment: {
+        method: row.payment_method,
+        status: row.payment_status,
+        transaction_id: row.stripe_payment_intent_id || row.stripe_session_id || null,
+      },
+      pricing: {
+        subtotal: Number(row.subtotal),
+        tax: Number(row.tax),
+        shipping_fee: Number(row.shipping_fee),
+        discount: Number(row.discount),
+        total: Number(row.total_amount),
+        currency: row.currency,
+        vat_percentage: VAT_PERCENT,
+      },
+      coupon: {
+        code: row.coupon_code || null,
+        type: row.coupon_discount_type || null,
+        value: row.coupon_discount_value !== null && row.coupon_discount_value !== undefined
+          ? Number(row.coupon_discount_value)
+          : null,
+        discount_amount: couponDiscountAmount,
+      },
+      order_status: row.order_status,
+      shipping_address: shippingAddress,
+      billing_address: shippingAddress,
+      items,
+      tracking: {
+        courier: null,
+        tracking_number: null,
+        tracking_url: null,
+        estimated_delivery: null,
+        status: row.order_status,
+      },
+      timeline: [
+        {
+          status: row.order_status,
+          date: row.created_at,
+        },
+      ],
+      invoice: {
+        invoice_number: null,
+        invoice_url: null,
+      },
+      notes: null,
+      gift_wrap: false,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+
+    return res.json({
+      success: true,
+      data: order,
+    });
+  } catch (err) {
+    next(err);
+  } finally {
+    client.release();
+  }
+};

@@ -397,9 +397,15 @@ exports.getProducts = async (req, res, next) => {
 
     const result = await pool.query({ text, values });
 
+    // For cursor pagination: we fetch limit + 1 to check if more exist
+    // For page pagination: we fetch exactly limit records
     const hasMore = result.rows.length > limit;
     const trimmed = hasMore ? result.rows.slice(0, limit) : result.rows;
-    const nextCursor = hasMore ? trimmed[trimmed.length - 1].id : null;
+    
+    // nextCursor should be the ID of the first product in the next page
+    // If we fetched limit + 1 records, the (limit+1)th record is the first of next page
+    const nextCursor = hasMore ? result.rows[limit].id : null;
+    
     const products = trimmed.map((row) => ({
       id: row.id,
       name: row.name,
@@ -415,19 +421,14 @@ exports.getProducts = async (req, res, next) => {
       afterimage: resolveMediaUrl(row.afterimage, row.afterimage_key, row.media_provider, 'product'),
     }));
 
-    const payload =
-      mode === "page"
-        ? {
-            page,
-            limit,
-            count: products.length,
-            products,
-          }
-        : {
-            products,
-            nextCursor,
-            hasMore,
-          };
+    // Standardize response format - always use data and pagination structure
+    const payload = {
+      data: products,
+      pagination: {
+        hasMore,
+        nextCursor,
+      },
+    };
 
     if (redis) {
       await redis.set(cacheKey, JSON.stringify(payload), { EX: 60 });
