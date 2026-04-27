@@ -14,7 +14,8 @@ exports.submitContact = async (req, res, next) => {
     const errors = [];
 
     if (!name || typeof name !== "string" || name.trim().length < 2) {
-      errors.push({ field: "name", message: "Name is required and must be at least 2 characters" });
+      const currentLen = name ? name.trim().length : 0;
+      errors.push({ field: "name", message: `Name must be at least 2 characters (you entered ${currentLen})` });
     }
 
     if (!email || typeof email !== "string") {
@@ -27,7 +28,8 @@ exports.submitContact = async (req, res, next) => {
     }
 
     if (!message || typeof message !== "string" || message.trim().length < 10) {
-      errors.push({ field: "message", message: "Message is required and must be at least 10 characters" });
+      const currentLen = message ? message.trim().length : 0;
+      errors.push({ field: "message", message: `Message must be at least 10 characters (you entered ${currentLen})` });
     }
 
     if (errors.length > 0) {

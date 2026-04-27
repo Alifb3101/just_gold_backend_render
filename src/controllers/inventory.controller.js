@@ -51,6 +51,7 @@ exports.getProductsInventory = async (req, res, next) => {
       SELECT 
         p.id as product_id,
         p.name as product_name,
+        p.product_model_no,
         p.base_price,
         p.base_stock,
         p.thumbnail,
@@ -75,7 +76,7 @@ exports.getProductsInventory = async (req, res, next) => {
       LEFT JOIN product_variants pv ON pv.product_id = p.id
       LEFT JOIN categories c ON c.id = p.category_id
       WHERE ${whereClause}
-      GROUP BY p.id, p.name, p.base_price, p.base_stock, p.thumbnail, p.category_id, c.name
+      GROUP BY p.id, p.name, p.product_model_no, p.base_price, p.base_stock, p.thumbnail, p.category_id, c.name
       ORDER BY p.id DESC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
     `;
@@ -87,6 +88,7 @@ exports.getProductsInventory = async (req, res, next) => {
       data: dataResult.rows.map(row => ({
         product_id: row.product_id,
         product_name: row.product_name,
+        product_model_no: row.product_model_no,
         base_price: parseFloat(row.base_price),
         base_stock: row.base_stock,
         thumbnail: row.thumbnail,
@@ -122,6 +124,7 @@ exports.getProductInventory = async (req, res, next) => {
       SELECT 
         p.id as product_id,
         p.name as product_name,
+        p.product_model_no,
         p.description,
         p.base_price,
         p.base_stock,
@@ -150,7 +153,7 @@ exports.getProductInventory = async (req, res, next) => {
       LEFT JOIN product_variants pv ON pv.product_id = p.id
       LEFT JOIN categories c ON c.id = p.category_id
       WHERE p.id = $1
-      GROUP BY p.id, p.name, p.description, p.base_price, p.base_stock,
+      GROUP BY p.id, p.name, p.product_model_no, p.description, p.base_price, p.base_stock,
                p.thumbnail, p.afterimage, p.category_id, c.name, p.is_active, p.created_at
     `;
 
@@ -170,6 +173,7 @@ exports.getProductInventory = async (req, res, next) => {
       data: {
         product_id: row.product_id,
         product_name: row.product_name,
+        product_model_no: row.product_model_no,
         description: row.description,
         base_price: parseFloat(row.base_price),
         base_stock: row.base_stock,
