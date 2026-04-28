@@ -44,7 +44,10 @@ router.delete("/newsletter/subscribers/:id", auth, role("admin"), removeNewslett
 router.delete("/v1/newsletter/subscribers/:id", auth, role("admin"), removeNewsletterSubscriber);
 router.post("/contact", validateBody(contactMessageSchema), createContactMessage);
 router.post("/orders/create", validateBody(orderCreateSchema), createOrderAndSendEmail);
+router.post("/v1/orders/create", validateBody(orderCreateSchema), createOrderAndSendEmail);
 router.patch("/orders/:id/status", validateBody(orderStatusUpdateSchema), updateOrderStatusAndNotify);
+router.patch("/v1/orders/:id/status", validateBody(orderStatusUpdateSchema), updateOrderStatusAndNotify);
 router.post("/auth/forgot-password", validateBody(forgotPasswordSchema), forgotPassword);
+router.post("/v1/auth/forgot-password", validateBody(forgotPasswordSchema), forgotPassword);
 
 module.exports = router;
