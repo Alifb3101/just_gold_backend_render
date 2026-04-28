@@ -112,6 +112,7 @@ app.get("/", (req, res) => {
 app.use("/", require("./routes/sitemap.routes"));
 
 app.use("/api/webhook", require("./routes/webhook.routes"));
+app.use("/api", require("./routes/transactional-email.routes"));
 app.use("/api/v1/auth", require("./routes/auth.routes"));
 app.use("/api/v1", require("./routes/product.routes"));
 app.use("/api/v1/orders", require("./routes/order.routes"));
@@ -130,7 +131,6 @@ app.use("/api", require("./routes/section.routes"));
 app.use("/api/v1", require("./routes/section.routes"));
 app.use("/api/v1/settings", require("./routes/settings.routes"));
 app.use("/api/v1/inventory", require("./routes/inventory.routes"));
-app.use("/api", require("./routes/transactional-email.routes"));
 
 
 /* ---------------- 404 HANDLER ---------------- */
