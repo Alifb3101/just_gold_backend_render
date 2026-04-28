@@ -187,6 +187,103 @@ const ensureProductTagsSchema = async () => {
 };
 
 /**
+ * Ensure transactional email schema compatibility once at startup
+ */
+const ensureTransactionalEmailSchema = async () => {
+  const client = await pool.connect();
+  try {
+    initializationLog("🔄 Initializing transactional email schema...");
+
+    await client.query("BEGIN");
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+        id BIGSERIAL PRIMARY KEY,
+        email VARCHAR(320) NOT NULL UNIQUE,
+        name VARCHAR(120),
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        subscribed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    initializationLog("✓ newsletter_subscribers table added/verified");
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS contact_messages (
+        id BIGSERIAL PRIMARY KEY,
+        name VARCHAR(120) NOT NULL,
+        email VARCHAR(320) NOT NULL,
+        phone VARCHAR(32),
+        subject VARCHAR(160) NOT NULL,
+        message TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    initializationLog("✓ contact_messages table added/verified");
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS email_logs (
+        id BIGSERIAL PRIMARY KEY,
+        template_key VARCHAR(80) NOT NULL,
+        to_email VARCHAR(320) NOT NULL,
+        subject VARCHAR(255) NOT NULL,
+        status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failed')),
+        error_message TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        next_retry_at TIMESTAMPTZ,
+        payload JSONB,
+        provider VARCHAR(40) NOT NULL DEFAULT 'brevo',
+        provider_message_id VARCHAR(255),
+        sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    initializationLog("✓ email_logs table added/verified");
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id BIGSERIAL PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL,
+        token_hash VARCHAR(128) NOT NULL UNIQUE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    initializationLog("✓ password_reset_tokens table added/verified");
+
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_newsletter_subscribers_email ON newsletter_subscribers(email)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_contact_messages_email ON contact_messages(email)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_email_logs_status_retry ON email_logs(status, next_retry_at)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id)`
+    );
+
+    await client.query("COMMIT");
+    initializationLog("✅ Transactional email schema initialization complete!\n");
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackErr) {
+      console.warn("[DB_INIT] ROLLBACK failed (connection may be down):", rollbackErr.message);
+    }
+    initializationLog("❌ Transactional email schema initialization failed:", err.message);
+    console.error("[DB_INIT] Transactional email initialization error:", err.message);
+  } finally {
+    client.release();
+  }
+};
+
+/**
  * Initialize database on server startup
  */
 const initializeDatabase = async () => {
@@ -194,6 +291,7 @@ const initializeDatabase = async () => {
     initializationLog("Starting database initialization...");
     await ensureGuestCartSchema();
     await ensureProductTagsSchema();
+    await ensureTransactionalEmailSchema();
   } catch (err) {
     initializationLog("⚠️  Database initialization failed (non-fatal):", err.message);
     console.warn("[DB_INIT] Server will continue running. Check database connection.");

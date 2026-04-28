@@ -29,6 +29,7 @@ const corsOptions = {
     "Authorization",
     "X-Guest-Token", // Frontend guest token header
     "X-Requested-With",
+    "X-Confirm-Delete",
   ],
   exposedHeaders: ["Content-Range", "X-Content-Range"], // Expose headers for the frontend
   maxAge: 86400, // 24 hours preflight cache
@@ -129,6 +130,7 @@ app.use("/api", require("./routes/section.routes"));
 app.use("/api/v1", require("./routes/section.routes"));
 app.use("/api/v1/settings", require("./routes/settings.routes"));
 app.use("/api/v1/inventory", require("./routes/inventory.routes"));
+app.use("/api", require("./routes/transactional-email.routes"));
 
 
 /* ---------------- 404 HANDLER ---------------- */
