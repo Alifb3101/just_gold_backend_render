@@ -8,7 +8,7 @@ const { syncBestSellerSection } = require("./best-seller.service");
 
 const CURRENCY = "AED";
 const TAX_PERCENT = Number(process.env.CHECKOUT_TAX_PERCENT || 0);
-const DEFAULT_SHIPPING_FEE = Number(process.env.CHECKOUT_SHIPPING_FEE || 20);
+const DEFAULT_SHIPPING_FEE = Number(process.env.CHECKOUT_SHIPPING_FEE || 26);
 const FREE_SHIPPING_THRESHOLD = Number(process.env.CHECKOUT_FREE_SHIPPING_THRESHOLD || 200);
 const isCouponDebugEnabled = () => String(process.env.COUPON_DEBUG || "").toLowerCase() === "true";
 

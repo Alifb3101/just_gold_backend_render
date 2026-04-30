@@ -181,7 +181,8 @@ exports.getMyOrders = async (req, res, next) => {
             p.thumbnail,
             p.product_model_no AS sku,
             pv.shade,
-            pv.variant_model_no
+            pv.variant_model_no,
+            pv.main_image AS variant_image
           FROM order_items oi
           JOIN products p ON p.id = oi.product_id
           LEFT JOIN product_variants pv ON pv.id = oi.variant_id
@@ -198,7 +199,7 @@ exports.getMyOrders = async (req, res, next) => {
           product_id: row.product_id,
           name: row.product_name_snapshot,
           slug: row.slug || null,
-          thumbnail: row.thumbnail || null,
+          thumbnail: row.variant_image || row.thumbnail || null,
           sku: row.sku || null,
           variant: {
             name: row.variant_model_no || null,
@@ -708,7 +709,8 @@ exports.getMyOrderById = async (req, res, next) => {
         p.thumbnail,
         p.product_model_no AS sku,
         pv.shade,
-        pv.variant_model_no
+        pv.variant_model_no,
+        pv.main_image AS variant_image
       FROM order_items oi
       JOIN products p ON p.id = oi.product_id
       LEFT JOIN product_variants pv ON pv.id = oi.variant_id
@@ -723,7 +725,7 @@ exports.getMyOrderById = async (req, res, next) => {
       variant_id: item.variant_id,
       name: item.product_name_snapshot,
       slug: item.slug,
-      thumbnail: item.thumbnail,
+      thumbnail: item.variant_image || item.thumbnail,
       sku: item.sku,
       variant: { shade: item.shade, model_no: item.variant_model_no },
       quantity: Number(item.quantity),

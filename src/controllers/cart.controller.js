@@ -6,7 +6,7 @@ const { ApiError } = require("../utils/apiError");
 
 const COUPON_COOKIE = process.env.COUPON_COOKIE_NAME || "coupon_code";
 const FREE_SHIPPING_THRESHOLD = Number(process.env.CHECKOUT_FREE_SHIPPING_THRESHOLD || 200);
-const DEFAULT_SHIPPING_FEE = Number(process.env.CHECKOUT_SHIPPING_FEE || 20);
+const DEFAULT_SHIPPING_FEE = Number(process.env.CHECKOUT_SHIPPING_FEE || 26);
 const isProd = () => process.env.NODE_ENV === "production";
 const setCouponCookie = (res, code) => {
   if (!code) return;

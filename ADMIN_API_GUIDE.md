@@ -361,7 +361,7 @@ curl -X GET "http://localhost:5000/api/v1/orders/admin/all?page=1&limit=20&order
       "pricing": {
         "subtotal": 500.00,
         "tax": 0,
-        "shipping_fee": 20.00,
+        "shipping_fee": 26.00,
         "discount": 0,
         "total": 520.00,
         "currency": "AED"
@@ -417,7 +417,7 @@ curl -X GET "http://localhost:5000/api/v1/orders/admin/uuid-here" \
     "pricing": {
       "subtotal": 500.00,
       "tax": 0,
-      "shipping_fee": 20.00,
+      "shipping_fee": 26.00,
       "discount": 0,
       "total": 520.00,
       "currency": "AED",
@@ -879,7 +879,7 @@ curl -X GET "http://localhost:5000/api/v1/settings/"
   "data": {
     "media_provider": "cloudinary",
     "checkout_tax_percent": 0,
-    "checkout_shipping_fee": 20,
+    "checkout_shipping_fee": 26,
     "checkout_free_shipping_threshold": 200
   }
 }
