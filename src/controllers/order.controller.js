@@ -820,12 +820,15 @@ exports.updateOrderStatus = async (req, res, next) => {
   const client = await pool.connect();
 
   try {
+    await client.query("BEGIN");
+
     const { orderId } = req.params;
     const { order_status } = req.body;
 
     const validStatuses = ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"];
 
     if (!order_status || !validStatuses.includes(order_status)) {
+      await client.query("ROLLBACK");
       return res.status(400).json({
         success: false,
         message: `Invalid order_status. Must be one of: ${validStatuses.join(", ")}`,
@@ -837,6 +840,7 @@ exports.updateOrderStatus = async (req, res, next) => {
     const checkResult = await client.query(checkQuery, [orderId]);
 
     if (!checkResult.rows.length) {
+      await client.query("ROLLBACK");
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
@@ -849,6 +853,7 @@ exports.updateOrderStatus = async (req, res, next) => {
 
     // Allow cancellation from pending/confirmed only
     if (order_status === "cancelled" && !["pending", "confirmed"].includes(currentStatus)) {
+      await client.query("ROLLBACK");
       return res.status(400).json({
         success: false,
         message: "Can only cancel orders that are pending or confirmed",
@@ -857,6 +862,7 @@ exports.updateOrderStatus = async (req, res, next) => {
 
     // Don't allow going backwards (except for special cases)
     if (order_status !== "cancelled" && newIndex < currentIndex && currentStatus !== "cancelled") {
+      await client.query("ROLLBACK");
       return res.status(400).json({
         success: false,
         message: `Cannot change status from ${currentStatus} to ${order_status}`,
@@ -936,6 +942,9 @@ exports.updateOrderStatus = async (req, res, next) => {
 
     const updateResult = await client.query(updateQuery, [order_status, orderId]);
 
+    // Commit transaction before returning
+    await client.query("COMMIT");
+
     return res.json({
       success: true,
       message: "Order status updated successfully",
@@ -948,6 +957,11 @@ exports.updateOrderStatus = async (req, res, next) => {
       },
     });
   } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      console.error("Rollback failed:", rollbackError.message);
+    }
     next(err);
   } finally {
     client.release();
@@ -962,12 +976,15 @@ exports.updatePaymentStatus = async (req, res, next) => {
   const client = await pool.connect();
 
   try {
+    await client.query("BEGIN");
+
     const { orderId } = req.params;
     const { payment_status } = req.body;
 
     const validPaymentStatuses = ["pending", "paid", "failed", "refunded"];
 
     if (payment_status && !validPaymentStatuses.includes(payment_status)) {
+      await client.query("ROLLBACK");
       return res.status(400).json({
         success: false,
         message: `Invalid payment_status. Must be one of: ${validPaymentStatuses.join(", ")}`,
@@ -979,6 +996,7 @@ exports.updatePaymentStatus = async (req, res, next) => {
     const checkResult = await client.query(checkQuery, [orderId]);
 
     if (!checkResult.rows.length) {
+      await client.query("ROLLBACK");
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
@@ -1000,6 +1018,7 @@ exports.updatePaymentStatus = async (req, res, next) => {
     }
 
     if (!updates.length) {
+      await client.query("ROLLBACK");
       return res.status(400).json({
         success: false,
         message: "No valid fields to update. Provide payment_status.",
@@ -1018,6 +1037,9 @@ exports.updatePaymentStatus = async (req, res, next) => {
 
     const updateResult = await client.query(updateQuery, params);
 
+    // Commit transaction before returning
+    await client.query("COMMIT");
+
     return res.json({
       success: true,
       message: "Payment status updated successfully",
@@ -1031,6 +1053,11 @@ exports.updatePaymentStatus = async (req, res, next) => {
       },
     });
   } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      console.error("Rollback failed:", rollbackError.message);
+    }
     next(err);
   } finally {
     client.release();

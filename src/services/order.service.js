@@ -1313,4 +1313,5 @@ module.exports = {
   getOrderSummary,
   computeTotals,
   cancelOrder,
+  restoreStockForItems,
 };
